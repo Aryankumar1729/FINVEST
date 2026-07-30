@@ -119,6 +119,7 @@ class StockInvestResponse(APIModel):
     eps: float | None = None
     fifty_two_week_high: float | None = None
     fifty_two_week_low: float | None = None
+    is_gold_etf: bool
 
 
 class MutualFundInvestResponse(APIModel):

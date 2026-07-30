@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { PrimaryButton, GhostButton, Input, Select } from "../components/ui";
+import { PrimaryButton, GhostButton, Input, Select, Card } from "../components/ui";
 import { Wallet, Shield, TrendingUp, CheckCircle } from "lucide-react";
 import { riskQuestions } from "../lib/data";
-import { markOnboardingComplete } from "../lib/onboarding";
+import { markOnboardingComplete, submitOnboarding } from "../lib/onboarding";
+import { CURRENT_USER_ID } from "../lib/constants";
+import { toast } from "sonner";
 
 const steps = [
   { id: 0, label: "Welcome" },
@@ -15,6 +17,8 @@ const steps = [
 export function Onboarding() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -27,6 +31,42 @@ export function Onboarding() {
   const update = (f: string, v: string) => setForm((p) => ({ ...p, [f]: v }));
   const next = () => setStep((s) => s + 1);
   const prev = () => setStep((s) => s - 1);
+
+  const handleFinish = async () => {
+    const salaryVal = parseFloat(form.annualIncome);
+    if (Number.isNaN(salaryVal) || salaryVal <= 0) {
+      setSubmitError("Please enter a valid positive annual income.");
+      return;
+    }
+    setSubmitError(null);
+    setSubmitting(true);
+
+    const selfReportAnswers = [];
+    if (form.name.trim()) selfReportAnswers.push({ question: "Name", answer: form.name.trim() });
+    if (form.email.trim()) selfReportAnswers.push({ question: "Email", answer: form.email.trim() });
+    if (form.dob) selfReportAnswers.push({ question: "Date of Birth", answer: form.dob });
+    if (form.employment) selfReportAnswers.push({ question: "Employment", answer: form.employment });
+
+    try {
+      await submitOnboarding({
+        user_id: CURRENT_USER_ID,
+        salary: salaryVal,
+        tax_regime: "new", // TEMPORARY: hardcoded default, onboarding UI doesn't collect this yet
+        current_expense_estimate: 0, // TEMPORARY: hardcoded default, onboarding UI doesn't collect this yet
+        current_cash_balance: 0, // TEMPORARY: hardcoded default, onboarding UI doesn't collect this yet
+        liabilities: [], // TEMPORARY: hardcoded default, onboarding UI doesn't collect this yet
+        self_report_answers: selfReportAnswers,
+      });
+      markOnboardingComplete();
+      navigate("/");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Onboarding failed";
+      setSubmitError(msg);
+      toast.error(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="min-h-screen flex" style={{ background: "var(--background)" }}>
@@ -83,6 +123,11 @@ export function Onboarding() {
       {/* Right panel */}
       <div className="flex-1 flex items-center justify-center p-12">
         <div className="w-full max-w-md">
+          {submitError && (
+            <Card className="p-4 mb-6 border border-red-500/30 bg-red-500/10 text-sm text-red-400">
+              {submitError}
+            </Card>
+          )}
           {step === 0 && <WelcomeStep onNext={next} />}
           {step === 1 && <AboutStep form={form} update={update} onNext={next} onBack={prev} />}
           {step === 2 && <FinancialStep form={form} update={update} onNext={next} onBack={prev} />}
@@ -90,10 +135,7 @@ export function Onboarding() {
             <RiskStep
               form={form}
               update={update}
-              onFinish={() => {
-                markOnboardingComplete();
-                navigate("/");
-              }}
+              onFinish={handleFinish}
               onBack={prev}
             />
           )}

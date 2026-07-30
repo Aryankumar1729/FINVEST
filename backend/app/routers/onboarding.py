@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 @router.post("/onboarding", response_model=OnboardingResponse)
-async def onboard(req: OnboardingRequest) -> OnboardingResponse:
+def onboard(req: OnboardingRequest) -> OnboardingResponse:
     existing = db.get_user_profile(req.user_id)
     with db.connect() as conn:
         if existing is not None:

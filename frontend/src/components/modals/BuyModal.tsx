@@ -1,21 +1,17 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useApp } from "../../context/AppContext";
-import { stockList } from "../../lib/data";
 import { fmt } from "../../lib/utils";
-import { Input, Select, PrimaryButton, GhostButton } from "../ui";
+import { Input, Select, PrimaryButton, GhostButton, SearchBar, EmptyState } from "../ui";
 import { toast } from "sonner";
 import { X, TrendingUp } from "lucide-react";
-import { buyLot } from "../../lib/api";
+import { buyLot, getStocks } from "../../lib/api";
 import { CURRENT_USER_ID } from "../../lib/constants";
 import { todayISODate } from "../../lib/portfolio";
+import type { StockInvestResponse } from "../../lib/api-types";
 
 /** Catalog / API symbols use NSE suffix; mock list does not. */
 function toCatalogSymbol(symbol: string): string {
   return symbol.endsWith(".NS") ? symbol : `${symbol}.NS`;
-}
-
-function fromCatalogSymbol(symbol: string): string {
-  return symbol.endsWith(".NS") ? symbol.slice(0, -3) : symbol;
 }
 
 export function BuyModal() {
@@ -47,28 +43,91 @@ function BuyModalInner({
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const bare = fromCatalogSymbol(symbol || stockList[0].symbol);
-  const inStockList = stockList.some((s) => s.symbol === bare);
+  const [catalog, setCatalog] = useState<StockInvestResponse[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
-  const [selectedSymbol, setSelectedSymbol] = useState(bare);
+  const [selectedSymbol, setSelectedSymbol] = useState(symbol || "");
   const [qty, setQty] = useState("1");
-  const defaultPrice =
-    initialPrice != null && !Number.isNaN(initialPrice)
-      ? String(initialPrice)
-      : String((stockList.find((s) => s.symbol === bare) ?? stockList[0]).price);
-  const [buyPrice, setBuyPrice] = useState(defaultPrice);
+  const [buyPrice, setBuyPrice] = useState(
+    initialPrice != null && !Number.isNaN(initialPrice) ? String(initialPrice) : ""
+  );
   const [buyDate, setBuyDate] = useState(todayISODate());
   const [loading, setLoading] = useState(false);
+  const [searchText, setSearchText] = useState("");
+
+  // Derived first so the clear-on-filter effect can reference it.
+  const filteredCatalog = catalog.filter((s) => {
+    if (s.is_gold_etf) return false;
+    if (!searchText) return true;
+    const searchLower = searchText.toLowerCase();
+    return (
+      s.symbol.toLowerCase().includes(searchLower) ||
+      (s.name && s.name.toLowerCase().includes(searchLower))
+    );
+  });
+
+  useEffect(() => {
+    setCatalogLoading(true);
+    setCatalogError(null);
+    getStocks({ pageSize: 100 })
+      .then((res) => {
+        setCatalog(res.items);
+      })
+      .catch((err) => {
+        setCatalogError(err instanceof Error ? err.message : "Failed to load stocks");
+      })
+      .finally(() => {
+        setCatalogLoading(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (catalog.length > 0) {
+      if (!symbol) {
+        // General free-choice flow: default to first equity (no gold ETFs)
+        const filtered = catalog.filter((s) => !s.is_gold_etf);
+        if (filtered.length > 0 && !selectedSymbol) {
+          setSelectedSymbol(filtered[0].symbol);
+          if (!initialPrice && filtered[0].price != null) {
+            setBuyPrice(String(filtered[0].price));
+          }
+        }
+      } else {
+        // Pre-selected symbol locked flow
+        if (!initialPrice) {
+          const match = catalog.find((s) => s.symbol === symbol);
+          if (match && match.price != null) {
+            setBuyPrice(String(match.price));
+          }
+        }
+      }
+    }
+  }, [catalog, symbol, initialPrice, selectedSymbol]);
+
+  // Clear stale selection when search filters the selected symbol out of view.
+  // Do NOT auto-pick another symbol — require the user to choose explicitly.
+  useEffect(() => {
+    if (!symbol && selectedSymbol && searchText) {
+      const stillVisible = filteredCatalog.some((s) => s.symbol === selectedSymbol);
+      if (!stillVisible) {
+        setSelectedSymbol("");
+        setBuyPrice("");
+      }
+    }
+  }, [filteredCatalog, selectedSymbol, searchText, symbol]);
 
   const qtyNum = parseFloat(qty) || 0;
   const priceNum = parseFloat(buyPrice) || 0;
   const total = qtyNum * priceNum;
-  const valid = qtyNum > 0 && priceNum > 0 && Boolean(buyDate);
+  const valid = qtyNum > 0 && priceNum > 0 && Boolean(buyDate) && Boolean(selectedSymbol);
 
   const onSymbolChange = (next: string) => {
     setSelectedSymbol(next);
-    const s = stockList.find((row) => row.symbol === next);
-    if (s) setBuyPrice(String(s.price));
+    const s = catalog.find((row) => row.symbol === next);
+    if (s && s.price != null) {
+      setBuyPrice(String(s.price));
+    }
   };
 
   const submit = async () => {
@@ -92,6 +151,68 @@ function BuyModalInner({
       setLoading(false);
     }
   };
+
+  if (catalogLoading && catalog.length === 0) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ animation: "fadeIn 0.15s ease" }}>
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+        <div
+          className="relative rounded-2xl border border-white/[0.08] w-full max-w-md flex flex-col overflow-hidden"
+          style={{
+            background: "rgba(14,18,27,0.99)",
+            boxShadow: "0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04)",
+            animation: "slideUp 0.2s cubic-bezier(0.16,1,0.3,1)",
+          }}
+        >
+          <div className="flex items-center justify-between px-6 py-5 border-b border-white/[0.06]">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-primary/15 border border-primary/20 flex items-center justify-center">
+                <TrendingUp size={13} className="text-primary" />
+              </div>
+              <p className="text-sm font-semibold text-foreground">Buy Stock</p>
+            </div>
+            <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-lg hover:bg-white/[0.05]">
+              <X size={14} />
+            </button>
+          </div>
+          <div className="px-6 py-12 flex items-center justify-center">
+            <p className="text-sm text-muted-foreground text-center animate-pulse">Loading stocks…</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (catalogError && catalog.length === 0) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ animation: "fadeIn 0.15s ease" }}>
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+        <div
+          className="relative rounded-2xl border border-white/[0.08] w-full max-w-md flex flex-col overflow-hidden"
+          style={{
+            background: "rgba(14,18,27,0.99)",
+            boxShadow: "0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04)",
+            animation: "slideUp 0.2s cubic-bezier(0.16,1,0.3,1)",
+          }}
+        >
+          <div className="flex items-center justify-between px-6 py-5 border-b border-white/[0.06]">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-primary/15 border border-primary/20 flex items-center justify-center">
+                <TrendingUp size={13} className="text-primary" />
+              </div>
+              <p className="text-sm font-semibold text-foreground">Buy Stock</p>
+            </div>
+            <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-lg hover:bg-white/[0.05]">
+              <X size={14} />
+            </button>
+          </div>
+          <div className="px-6 py-8">
+            <EmptyState icon={<TrendingUp size={24} />} title="Couldn't load stocks" description={catalogError} />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ animation: "fadeIn 0.15s ease" }}>
@@ -119,16 +240,28 @@ function BuyModalInner({
         <div className="px-6 py-5 flex flex-col gap-4">
           <div>
             <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">Stock</label>
-            {inStockList ? (
-              <Select value={selectedSymbol} onChange={(e) => onSymbolChange(e.target.value)}>
-                {stockList.map((s) => (
-                  <option key={s.symbol} value={s.symbol}>{s.symbol}.NS — {s.name}</option>
-                ))}
-              </Select>
-            ) : (
+            {symbol ? (
               <div className="px-3 py-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] font-mono text-sm text-foreground">
-                {toCatalogSymbol(selectedSymbol)}
-                {/* Outside mock stockList (e.g. gold ETF) — display-only; not forced into dropdown */}
+                {toCatalogSymbol(symbol)}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <SearchBar
+                  value={searchText}
+                  onChange={setSearchText}
+                  placeholder="Search symbol or company..."
+                />
+                <Select value={selectedSymbol} onChange={(e) => onSymbolChange(e.target.value)}>
+                  {filteredCatalog.length === 0 ? (
+                    <option value="" disabled>No stocks found</option>
+                  ) : (
+                    filteredCatalog.map((s) => (
+                      <option key={s.symbol} value={s.symbol}>
+                        {s.symbol} — {s.name ?? "Unknown"}
+                      </option>
+                    ))
+                  )}
+                </Select>
               </div>
             )}
           </div>

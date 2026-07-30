@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.get("/journal", response_model=list[JournalEntryResponse])
-async def list_journal(
+def list_journal(
     user_id: str = Query(...),
     entry_type: JournalEntryType | None = Query(None),
     limit: int = Query(20, le=100),
@@ -38,7 +38,7 @@ async def list_journal(
 
 
 @router.post("/journal", response_model=JournalEntryResponse)
-async def create_journal(req: JournalCreateRequest) -> JournalEntryResponse:
+def create_journal(req: JournalCreateRequest) -> JournalEntryResponse:
     if db.get_user_profile(req.user_id) is None:
         raise HTTPException(status_code=404, detail="User profile not found")
     chroma_id = f"user:{req.user_id}:{uuid4().hex}"

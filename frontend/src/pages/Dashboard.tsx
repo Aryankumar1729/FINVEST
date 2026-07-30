@@ -1,7 +1,6 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { BarChart2, Target, Receipt, Wallet, Plus, ChevronRight, Info } from "lucide-react";
+import { BarChart2, Target, Receipt, Wallet, Plus, ChevronRight } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { chartData } from "../lib/data";
 import { fmt } from "../lib/utils";
 import {
   ChangeChip, StatusBadge, ProgressBar, SectionHeader, Card, TableContainer,
@@ -9,20 +8,43 @@ import {
 } from "../components/ui";
 import { useNavigate } from "react-router";
 import { useApp } from "../context/AppContext";
-import { getGoals, getPortfolio } from "../lib/api";
+import { getGoals, getPortfolio, getPortfolioHistory, getTax } from "../lib/api";
 import { CURRENT_USER_ID } from "../lib/constants";
-import type { AggregatedHolding, GoalListItem, PortfolioResponse } from "../lib/api-types";
+import type {
+  AggregatedHolding,
+  GoalListItem,
+  HistoryPoint,
+  PortfolioResponse,
+  TaxResponse,
+} from "../lib/api-types";
 import { goalStatus } from "../lib/goals";
 import { aggregatePricedLots, num } from "../lib/portfolio";
 
-function ChartTooltip({ active, payload, label }: any) {
+function ChartTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ value: number; payload: HistoryPoint }>;
+}) {
   if (!active || !payload?.length) return null;
+  const point = payload[0];
   return (
     <div className="rounded-xl border border-white/[0.08] bg-[#0e1219] px-3.5 py-2.5 shadow-xl">
-      <p className="text-[10px] text-muted-foreground mb-0.5 uppercase tracking-wider">{label}</p>
-      <p className="text-sm font-mono font-semibold text-foreground">{fmt(payload[0].value)}</p>
+      <p className="text-[10px] text-muted-foreground mb-0.5 uppercase tracking-wider">
+        {point.payload.date}
+      </p>
+      <p className="text-sm font-mono font-semibold text-foreground">{fmt(point.value)}</p>
     </div>
   );
+}
+
+/** Same tick style as InvestDetailView stock/MF charts. */
+function formatChartTick(date: string, points: HistoryPoint[]): string {
+  if (points.length <= 2) return date.slice(5);
+  const d = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return date.slice(5);
+  return d.toLocaleDateString("en-IN", { month: "short", day: "numeric" });
 }
 
 export function Dashboard() {
@@ -32,6 +54,8 @@ export function Dashboard() {
 
   const [portfolio, setPortfolio] = useState<PortfolioResponse | null>(null);
   const [goals, setGoals] = useState<GoalListItem[]>([]);
+  const [historyPoints, setHistoryPoints] = useState<HistoryPoint[]>([]);
+  const [tax, setTax] = useState<TaxResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,11 +63,18 @@ export function Dashboard() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    Promise.all([getPortfolio(CURRENT_USER_ID), getGoals(CURRENT_USER_ID)])
-      .then(([p, g]) => {
+    Promise.all([
+      getPortfolio(CURRENT_USER_ID),
+      getGoals(CURRENT_USER_ID),
+      getPortfolioHistory(CURRENT_USER_ID, "1y"),
+      getTax(CURRENT_USER_ID),
+    ])
+      .then(([p, g, history, t]) => {
         if (cancelled) return;
         setPortfolio(p);
         setGoals(g.goals);
+        setHistoryPoints(history.points);
+        setTax(t);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -68,6 +99,14 @@ export function Dashboard() {
   const totalGain = holdings.reduce((a, h) => a + h.unrealized_gain, 0);
   const hasHoldings = holdings.length > 0;
 
+  const historyChangePct = useMemo(() => {
+    if (historyPoints.length < 2) return null;
+    const first = historyPoints[0].value;
+    const last = historyPoints[historyPoints.length - 1].value;
+    if (!first) return null;
+    return ((last - first) / first) * 100;
+  }, [historyPoints]);
+
   const goalsProgressPct = useMemo(() => {
     if (!goals.length) return 0;
     const ratios = goals.map((g) => {
@@ -89,8 +128,8 @@ export function Dashboard() {
     },
     {
       label: "Unpaid Tax",
-      value: "—",
-      sub: "Not wired yet",
+      value: loading || !tax ? "…" : fmt(tax.unpaid_capital_gains_tax),
+      sub: loading || !tax ? "Loading…" : `AY ${tax.assessment_year}`,
       icon: <Receipt size={15} />,
       accent: false,
       gradient: "from-amber-500/10 to-transparent",
@@ -148,36 +187,56 @@ export function Dashboard() {
           ))}
         </div>
 
-        {/* Trend chart — still mock (no historical endpoint) */}
         <Card className="p-6">
           <div className="flex items-start justify-between mb-6">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground mb-1">Portfolio Value</p>
               <p className="text-2xl font-mono font-bold text-foreground">{loading ? "…" : fmt(totalValue)}</p>
               <div className="flex items-center gap-2 mt-1.5">
-                <ChangeChip value={4.21} />
-                <span className="text-xs text-muted-foreground">past 12 months</span>
+                {loading ? (
+                  <span className="text-xs text-muted-foreground">Loading…</span>
+                ) : historyChangePct != null ? (
+                  <>
+                    <ChangeChip value={historyChangePct} />
+                    <span className="text-xs text-muted-foreground">past 1Y</span>
+                  </>
+                ) : (
+                  <span className="text-xs text-muted-foreground">past 1Y</span>
+                )}
               </div>
             </div>
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/8 border border-amber-500/20">
-              <Info size={11} className="text-amber-400" />
-              <span className="text-[10px] font-medium text-amber-400">Illustrative chart data</span>
-            </div>
           </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={chartData} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
-              <defs>
-                <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#00c97a" stopOpacity={0.25} />
-                  <stop offset="100%" stopColor="#00c97a" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#6b7585", fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
-              <YAxis hide />
-              <Tooltip content={<ChartTooltip />} cursor={{ stroke: "rgba(255,255,255,0.06)", strokeWidth: 1 }} />
-              <Area type="monotone" dataKey="value" stroke="#00c97a" strokeWidth={1.5} fill={`url(#${gradId})`} dot={false} />
-            </AreaChart>
-          </ResponsiveContainer>
+          {loading ? (
+            <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">
+              Loading…
+            </div>
+          ) : historyPoints.length === 0 ? (
+            <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">
+              No portfolio history yet
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={historyPoints} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#00c97a" stopOpacity={0.25} />
+                    <stop offset="100%" stopColor="#00c97a" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: "#6b7585", fontFamily: "DM Mono" }}
+                  axisLine={false}
+                  tickLine={false}
+                  minTickGap={40}
+                  tickFormatter={(d: string) => formatChartTick(d, historyPoints)}
+                />
+                <YAxis hide />
+                <Tooltip content={<ChartTooltip />} cursor={{ stroke: "rgba(255,255,255,0.06)", strokeWidth: 1 }} />
+                <Area type="monotone" dataKey="value" stroke="#00c97a" strokeWidth={1.5} fill={`url(#${gradId})`} dot={false} />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
         </Card>
 
         <div>

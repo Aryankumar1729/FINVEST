@@ -14,24 +14,56 @@ import backend.app.db as db
 
 
 STOCKS = [
-    ("RELIANCE.NS", "Energy", False),
-    ("TCS.NS", "Technology", False),
-    ("HDFCBANK.NS", "Financial Services", False),
-    ("INFY.NS", "Technology", False),
-    ("ITC.NS", "Consumer Defensive", False),
-    ("ICICIBANK.NS", "Financial Services", False),
-    ("HINDUNILVR.NS", "Consumer Defensive", False),
-    ("SBIN.NS", "Financial Services", False),
-    ("BHARTIARTL.NS", "Communication Services", False),
-    ("KOTAKBANK.NS", "Financial Services", False),
-    ("LT.NS", "Industrials", False),
+    ("ADANIENT.NS", "Metals & Mining", False),
+    ("ADANIPORTS.NS", "Services", False),
+    ("APOLLOHOSP.NS", "Healthcare", False),
+    ("ASIANPAINT.NS", "Consumer Durables", False),
     ("AXISBANK.NS", "Financial Services", False),
-    ("ASIANPAINT.NS", "Basic Materials", False),
-    ("MARUTI.NS", "Consumer Cyclical", False),
+    ("BAJAJ-AUTO.NS", "Automobile and Auto Components", False),
+    ("BAJFINANCE.NS", "Financial Services", False),
+    ("BAJAJFINSV.NS", "Financial Services", False),
+    ("BEL.NS", "Capital Goods", False),
+    ("BHARTIARTL.NS", "Telecommunication", False),
+    ("CIPLA.NS", "Healthcare", False),
+    ("COALINDIA.NS", "Oil Gas & Consumable Fuels", False),
+    ("DRREDDY.NS", "Healthcare", False),
+    ("EICHERMOT.NS", "Automobile and Auto Components", False),
+    ("ETERNAL.NS", "Consumer Services", False),
+    ("GRASIM.NS", "Construction Materials", False),
+    ("HCLTECH.NS", "Information Technology", False),
+    ("HDFCBANK.NS", "Financial Services", False),
+    ("HDFCLIFE.NS", "Financial Services", False),
+    ("HINDALCO.NS", "Metals & Mining", False),
+    ("HINDUNILVR.NS", "Fast Moving Consumer Goods", False),
+    ("ICICIBANK.NS", "Financial Services", False),
+    ("INDIGO.NS", "Services", False),
+    ("INFY.NS", "Information Technology", False),
+    ("ITC.NS", "Fast Moving Consumer Goods", False),
+    ("JIOFIN.NS", "Financial Services", False),
+    ("JSWSTEEL.NS", "Metals & Mining", False),
+    ("KOTAKBANK.NS", "Financial Services", False),
+    ("LT.NS", "Construction", False),
+    ("M&M.NS", "Automobile and Auto Components", False),
+    ("MARUTI.NS", "Automobile and Auto Components", False),
+    ("MAXHEALTH.NS", "Healthcare", False),
+    ("NESTLEIND.NS", "Fast Moving Consumer Goods", False),
+    ("NTPC.NS", "Power", False),
+    ("ONGC.NS", "Oil Gas & Consumable Fuels", False),
+    ("POWERGRID.NS", "Power", False),
+    ("RELIANCE.NS", "Oil Gas & Consumable Fuels", False),
+    ("SBILIFE.NS", "Financial Services", False),
+    ("SHRIRAMFIN.NS", "Financial Services", False),
+    ("SBIN.NS", "Financial Services", False),
     ("SUNPHARMA.NS", "Healthcare", False),
-    ("TITAN.NS", "Consumer Cyclical", False),
-    ("WIPRO.NS", "Technology", False),
-    ("ULTRACEMCO.NS", "Basic Materials", False),
+    ("TCS.NS", "Information Technology", False),
+    ("TATACONSUM.NS", "Fast Moving Consumer Goods", False),
+    ("TMPV.NS", "Automobile and Auto Components", False),
+    ("TATASTEEL.NS", "Metals & Mining", False),
+    ("TECHM.NS", "Information Technology", False),
+    ("TITAN.NS", "Consumer Durables", False),
+    ("TRENT.NS", "Consumer Services", False),
+    ("ULTRACEMCO.NS", "Construction Materials", False),
+    ("WIPRO.NS", "Information Technology", False),
     ("GOLDBEES.NS", "Commodities", True),
     ("HDFCGOLD.NS", "Commodities", True),
 ]
@@ -58,38 +90,42 @@ FD_RATES = [
 
 
 def main() -> None:
-    for symbol, sector, is_gold_etf in STOCKS:
-        db.execute(
-            """
-            INSERT INTO stocks (symbol, sector, is_gold_etf)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (symbol) DO NOTHING
-            """,
-            (symbol, sector, is_gold_etf),
-        )
-    print(f"Seeded {len(STOCKS)} stocks")
+    db.open_pool()
+    try:
+        for symbol, sector, is_gold_etf in STOCKS:
+            db.execute(
+                """
+                INSERT INTO stocks (symbol, sector, is_gold_etf)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (symbol) DO NOTHING
+                """,
+                (symbol, sector, is_gold_etf),
+            )
+        print(f"Seeded {len(STOCKS)} stocks")
 
-    for scheme_name, risk_category, cagr in MUTUAL_FUNDS:
-        db.execute(
-            """
-            INSERT INTO mutual_funds (scheme_name, risk_category, cagr)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (scheme_name) DO NOTHING
-            """,
-            (scheme_name, risk_category, cagr),
-        )
-    print(f"Seeded {len(MUTUAL_FUNDS)} mutual funds")
+        for scheme_name, risk_category, cagr in MUTUAL_FUNDS:
+            db.execute(
+                """
+                INSERT INTO mutual_funds (scheme_name, risk_category, cagr)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (scheme_name) DO NOTHING
+                """,
+                (scheme_name, risk_category, cagr),
+            )
+        print(f"Seeded {len(MUTUAL_FUNDS)} mutual funds")
 
-    for bank_name, tenure_months, interest_rate in FD_RATES:
-        db.execute(
-            """
-            INSERT INTO fd_rates (bank_name, tenure_months, interest_rate)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (bank_name, tenure_months) DO NOTHING
-            """,
-            (bank_name, tenure_months, interest_rate),
-        )
-    print(f"Seeded {len(FD_RATES)} fd rates")
+        for bank_name, tenure_months, interest_rate in FD_RATES:
+            db.execute(
+                """
+                INSERT INTO fd_rates (bank_name, tenure_months, interest_rate)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (bank_name, tenure_months) DO NOTHING
+                """,
+                (bank_name, tenure_months, interest_rate),
+            )
+        print(f"Seeded {len(FD_RATES)} fd rates")
+    finally:
+        db.close_pool()
 
 
 if __name__ == "__main__":

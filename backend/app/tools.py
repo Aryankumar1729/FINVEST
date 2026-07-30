@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -45,6 +47,10 @@ MF_HISTORY_PERIOD_DAYS = {
     "5y": 365 * 5,
     "max": None,
 }
+# Portfolio proxy history: intersection of stock+MF windows, with stock 3y = 5y fetch + truncate.
+PORTFOLIO_HISTORY_PERIODS = frozenset({"1y", "3y", "5y", "max"})
+_PORTFOLIO_HISTORY_3Y_DAYS = 365 * 3
+_logger = logging.getLogger(__name__)
 
 SECTION_WEIGHTS = {
     "goal": 0.15,
@@ -621,8 +627,14 @@ def match_fifo_lots(
     return matches
 
 
-def calculate_salary_tax(salary: Any, tax_regime: str, assessment_year: int) -> dict[str, Any]:
-    config = get_tax_config(assessment_year)
+def calculate_salary_tax(
+    salary: Any,
+    tax_regime: str,
+    assessment_year: int,
+    *,
+    tax_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    config = tax_config if tax_config is not None else get_tax_config(assessment_year)
     regime_config = config["salary"][str(tax_regime)]
     slabs = regime_config["slabs"]
     income = _d(salary)
@@ -821,8 +833,15 @@ def calculate_ltcg_tax(
     }
 
 
-def calculate_fy_capital_gains_liability(user_id: str, assessment_year: int) -> dict[str, Any]:
-    config = get_tax_config(assessment_year)["capital_gains"]
+def calculate_fy_capital_gains_liability(
+    user_id: str,
+    assessment_year: int,
+    *,
+    tax_config: dict[str, Any] | None = None,
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    full_config = tax_config if tax_config is not None else get_tax_config(assessment_year)
+    config = full_config["capital_gains"]
     ltcg_rate = _d(config["ltcg_rate"])
     stcg_rate = _d(config["stcg_rate"])
     exemption = _d(config["ltcg_exemption"])
@@ -874,7 +893,8 @@ def calculate_fy_capital_gains_liability(user_id: str, assessment_year: int) -> 
         gold_ltcg_after = max(net_gold_ltcg, Decimal("0")) * ltcg_rate
         return taxable_ltcg * ltcg_rate + current_stcg * stcg_rate + gold_ltcg_after
 
-    profile = get_user_profile(user_id)
+    if profile is None:
+        profile = get_user_profile(user_id)
     salary = None if profile is None else profile.get("salary")
     tax_regime = None if profile is None else profile.get("tax_regime")
     salary_data_missing = salary is None or tax_regime is None
@@ -888,8 +908,22 @@ def calculate_fy_capital_gains_liability(user_id: str, assessment_year: int) -> 
             (_d(r["sell_price"]) - _d(r["buy_price"])) * _d(r["sold_quantity"])
             for r in slab_rows
         )
-        with_gain = _d(calculate_salary_tax(_d(salary) + total_slab_gain, str(tax_regime), assessment_year)["tax"])
-        base = _d(calculate_salary_tax(salary, str(tax_regime), assessment_year)["tax"])
+        with_gain = _d(
+            calculate_salary_tax(
+                _d(salary) + total_slab_gain,
+                str(tax_regime),
+                assessment_year,
+                tax_config=full_config,
+            )["tax"]
+        )
+        base = _d(
+            calculate_salary_tax(
+                salary,
+                str(tax_regime),
+                assessment_year,
+                tax_config=full_config,
+            )["tax"]
+        )
         return max(with_gain - base, Decimal("0"))
 
     all_rows = get_sell_allocations(user_id, assessment_year)
@@ -934,9 +968,10 @@ def _market_value(row: dict[str, Any]) -> tuple[Decimal | None, bool]:
         price = row.get("current_price")
         is_stale = False
         if price in (None, ""):
-            live = fetch_stock_price(row["stock_symbol"])
+            live = fetch_stock_price(row["stock_symbol"], skip_live_if_fresh_seconds=300)
             status = live.get("status")
-            if status in ("ok", "stale"):
+            # "cached" is returned when skip_live_if_fresh_seconds hits a fresh price_cache row
+            if status in ("ok", "stale", "cached"):
                 price = live["price"]
                 is_stale = status == "stale"
             else:
@@ -947,9 +982,9 @@ def _market_value(row: dict[str, Any]) -> tuple[Decimal | None, bool]:
     is_stale = False
     if nav in (None, ""):
         nav_ref = detail_stats.get("amfi_scheme_code") or detail_stats.get("amfi_ref") or row.get("scheme_name")
-        live = fetch_mf_nav(str(nav_ref))
+        live = fetch_mf_nav(str(nav_ref), skip_live_if_fresh_seconds=300)
         status = live.get("status")
-        if status in ("ok", "stale"):
+        if status in ("ok", "stale", "cached"):
             nav = live["price"]
             is_stale = status == "stale"
         else:
@@ -957,7 +992,7 @@ def _market_value(row: dict[str, Any]) -> tuple[Decimal | None, bool]:
     return qty * _d(nav), is_stale
 
 
-def calculate_goal_progress(user_id: str) -> dict[int, float]:
+async def calculate_goal_progress(user_id: str) -> dict[int, float]:
     """Map goal_id → live open market value for lots linked to that goal."""
     goal_lots = fetch_all(
         """
@@ -973,15 +1008,25 @@ def calculate_goal_progress(user_id: str) -> dict[int, float]:
     by_goal: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for row in goal_lots:
         by_goal[int(row["goal_id"])].append(row)
-    progress: dict[int, float] = {}
-    for goal_id, rows in by_goal.items():
-        total = Decimal("0")
-        for row in rows:
-            value, _is_stale = _market_value(row)
-            if value is not None:
-                total += value
-        progress[goal_id] = float(total)
-    return progress
+
+    # Outer per-goal loop is cheap aggregation; value work is _market_value per lot.
+    # Flatten all lots into one gather wave (same as parallelizing every inner loop at once).
+    flat: list[tuple[int, dict[str, Any]]] = [
+        (goal_id, row) for goal_id, rows in by_goal.items() for row in rows
+    ]
+    if not flat:
+        return {}
+
+    # _market_value never raises on price failure — returns (None, False); skip that lot only.
+    valued = await asyncio.gather(
+        *(asyncio.to_thread(_market_value, row) for _goal_id, row in flat)
+    )
+
+    totals: dict[int, Decimal] = {goal_id: Decimal("0") for goal_id in by_goal}
+    for (goal_id, _row), (value, _is_stale) in zip(flat, valued, strict=True):
+        if value is not None:
+            totals[goal_id] += value
+    return {goal_id: float(total) for goal_id, total in totals.items()}
 
 
 def calculate_overlap_and_concentration(user_id: str) -> dict[str, Any]:
@@ -1177,6 +1222,153 @@ def fetch_mf_nav_history(scheme_code: str, *, period: str = "3y") -> list[dict[s
         if not points:
             raise ValueError(f"No NAV points in period {period_key} for scheme {code}")
     return points
+
+
+def _truncate_history_to_recent_days(
+    points: list[dict[str, Any]], *, days: int
+) -> list[dict[str, Any]]:
+    """Keep points on/after (today - days). Assumes ascending by date."""
+    if not points:
+        return points
+    cutoff_s = (date.today() - timedelta(days=days)).isoformat()
+    return [p for p in points if p["date"] >= cutoff_s]
+
+
+def _amfi_scheme_code_for_mf(mutual_fund_id: int) -> str | None:
+    row = fetch_one(
+        "SELECT detail_stats FROM mutual_funds WHERE scheme_id = %s",
+        (mutual_fund_id,),
+    )
+    if not row:
+        return None
+    detail_stats = row.get("detail_stats") or {}
+    code = detail_stats.get("amfi_scheme_code")
+    if code in (None, ""):
+        return None
+    return str(code)
+
+
+def calculate_portfolio_history_proxy(user_id: str, *, period: str = "1y") -> list[dict[str, Any]]:
+    """
+    Proxy series: today's open holdings × each asset's historical price/NAV by date.
+    Ignores buy/sell timing and cash flows. Returns ascending {date, value} points.
+    """
+    period_key = (period or "1y").strip().lower()
+    if period_key not in PORTFOLIO_HISTORY_PERIODS:
+        raise ValueError(
+            f"Unsupported period {period!r}; allowed: {', '.join(sorted(PORTFOLIO_HISTORY_PERIODS))}"
+        )
+
+    portfolio = calculate_overlap_and_concentration(user_id)
+    priced_lots = portfolio.get("priced_lots") or []
+    if not priced_lots:
+        return []
+
+    # Group by asset → summed remaining_quantity
+    stock_qty: dict[str, float] = defaultdict(float)
+    mf_qty: dict[int, float] = defaultdict(float)
+    for lot in priced_lots:
+        qty = float(lot.get("remaining_quantity") or 0)
+        if qty <= 0:
+            continue
+        if lot.get("stock_symbol"):
+            stock_qty[str(lot["stock_symbol"])] += qty
+        elif lot.get("mutual_fund_id") is not None:
+            mf_qty[int(lot["mutual_fund_id"])] += qty
+
+    # Per-asset history: date → price (after optional stock 3y truncation)
+    series_by_asset: list[tuple[float, dict[str, float]]] = []
+
+    for symbol, qty in stock_qty.items():
+        fetch_period = "5y" if period_key == "3y" else period_key
+        try:
+            points = fetch_stock_price_history(symbol, period=fetch_period)
+        except Exception as exc:
+            _logger.warning(
+                "portfolio history: stock fetch failed symbol=%s period=%s: %s",
+                symbol,
+                fetch_period,
+                exc,
+            )
+            continue
+        if period_key == "3y":
+            before_n = len(points)
+            points = _truncate_history_to_recent_days(points, days=_PORTFOLIO_HISTORY_3Y_DAYS)
+            _logger.info(
+                "portfolio history: stock %s truncated 5y→3y points %s→%s",
+                symbol,
+                before_n,
+                len(points),
+            )
+        if not points:
+            _logger.warning(
+                "portfolio history: stock %s produced no points after period handling",
+                symbol,
+            )
+            continue
+        series_by_asset.append((qty, {p["date"]: float(p["value"]) for p in points}))
+
+    for mf_id, qty in mf_qty.items():
+        amfi = _amfi_scheme_code_for_mf(mf_id)
+        if not amfi:
+            _logger.warning(
+                "portfolio history: skipping mutual_fund_id=%s — no amfi_scheme_code in DB",
+                mf_id,
+            )
+            continue
+        try:
+            points = fetch_mf_nav_history(amfi, period=period_key)
+        except Exception as exc:
+            _logger.warning(
+                "portfolio history: MF fetch failed mutual_fund_id=%s amfi=%s period=%s: %s",
+                mf_id,
+                amfi,
+                period_key,
+                exc,
+            )
+            continue
+        if not points:
+            _logger.warning(
+                "portfolio history: MF mutual_fund_id=%s amfi=%s produced no points",
+                mf_id,
+                amfi,
+            )
+            continue
+        series_by_asset.append((qty, {p["date"]: float(p["value"]) for p in points}))
+
+    if not series_by_asset:
+        _logger.warning(
+            "portfolio history: no asset series fetched for user_id=%s period=%s",
+            user_id,
+            period_key,
+        )
+        return []
+
+    all_dates = sorted({d for _qty, series in series_by_asset for d in series})
+    # Forward-fill per asset from first available date; before first date → contribute 0
+    filled: list[tuple[float, dict[str, float | None]]] = []
+    for qty, series in series_by_asset:
+        first_date = min(series)
+        last: float | None = None
+        by_date: dict[str, float | None] = {}
+        for d in all_dates:
+            if d < first_date:
+                by_date[d] = None  # contribute 0
+                continue
+            if d in series:
+                last = series[d]
+            by_date[d] = last
+        filled.append((qty, by_date))
+
+    out: list[dict[str, Any]] = []
+    for d in all_dates:
+        total = 0.0
+        for qty, by_date in filled:
+            px = by_date[d]
+            if px is not None:
+                total += qty * px
+        out.append({"date": d, "value": round(total, 2)})
+    return out
 
 
 def _cagr(start: Any, end: Any, days: int) -> float:

@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.get("/tax", response_model=TaxResponse)
-async def get_tax(
+def get_tax(
     user_id: str = Query(...),
     assessment_year: int | None = Query(None),
 ) -> TaxResponse:
@@ -21,13 +21,24 @@ async def get_tax(
     profile = db.get_user_profile(user_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="User profile not found")
+    tax_config = db.get_tax_config(assessment_year)
     if profile.get("salary") is not None and profile.get("tax_regime") is not None:
         salary_tax = float(
-            tools.calculate_salary_tax(profile["salary"], profile["tax_regime"], assessment_year)["tax"]
+            tools.calculate_salary_tax(
+                profile["salary"],
+                profile["tax_regime"],
+                assessment_year,
+                tax_config=tax_config,
+            )["tax"]
         )
     else:
         salary_tax = 0.0
-    result = tools.calculate_fy_capital_gains_liability(user_id, assessment_year)
+    result = tools.calculate_fy_capital_gains_liability(
+        user_id,
+        assessment_year,
+        tax_config=tax_config,
+        profile=profile,
+    )
     unpaid = result["unpaid_capital_gains_tax"]
     return TaxResponse(
         assessment_year=assessment_year,
@@ -38,7 +49,7 @@ async def get_tax(
 
 
 @router.get("/tax/allocations", response_model=SellAllocationListResponse)
-async def list_tax_allocations(
+def list_tax_allocations(
     user_id: str = Query(...),
     assessment_year: int | None = Query(None),
     paid_status: Literal["unpaid", "paid"] | None = Query(None),
@@ -52,7 +63,7 @@ async def list_tax_allocations(
 
 
 @router.post("/tax/pay")
-async def pay_tax(req: PayRequest) -> dict:
+def pay_tax(req: PayRequest) -> dict:
     try:
         return db.mark_sell_allocation_paid(req.sell_allocation_id, req.user_id)
     except ValueError as exc:

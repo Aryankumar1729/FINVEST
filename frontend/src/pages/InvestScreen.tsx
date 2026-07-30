@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { aiRecs, fdList } from "../lib/data";
+import { aiRecs } from "../lib/data";
 import { fmt } from "../lib/utils";
 import {
   ChangeChip, SectionHeader, Card, TableContainer,
@@ -8,8 +8,8 @@ import {
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import type { InvestTab, PanelItem } from "../lib/types";
-import type { GoldInvestResponse, MutualFundInvestResponse, StockInvestResponse } from "../lib/api-types";
-import { getGoldList, getMutualFunds, getStocks } from "../lib/api";
+import type { GoldInvestResponse, MutualFundInvestResponse, StockInvestResponse, FixedDepositInvestResponse } from "../lib/api-types";
+import { getGoldList, getMutualFunds, getStocks, getFDs } from "../lib/api";
 import { num } from "../lib/portfolio";
 import { toast } from "sonner";
 import { TrendingUp, Sparkles, BookOpen, Shield, ChevronRight, ChevronLeft } from "lucide-react";
@@ -597,7 +597,58 @@ function GoldTab({
 }
 
 function FDTab({ search, setSearch }: any) {
-  const filtered = fdList.filter((f) =>
+  const [items, setItems] = useState<FixedDepositInvestResponse[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    getFDs()
+      .then((rows) => {
+        if (!cancelled) setItems(rows);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : "Failed to load fixed deposits";
+        setError(message);
+        toast.error(message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const formatTenure = (months: number): string => {
+    if (months === 0) return "0 Months";
+    if (months % 12 === 0) {
+      const years = months / 12;
+      return `${years} Year${years > 1 ? "s" : ""}`;
+    }
+    return `${months} Month${months > 1 ? "s" : ""}`;
+  };
+
+  const grouped = useMemo(() => {
+    const groupedMap = new Map<string, { tenure: string; rate: number }[]>();
+    for (const item of items) {
+      const label = formatTenure(item.tenure);
+      if (!groupedMap.has(item.bank)) {
+        groupedMap.set(item.bank, []);
+      }
+      groupedMap.get(item.bank)!.push({ tenure: label, rate: item.rate });
+    }
+    const list: { bank: string; rates: { tenure: string; rate: number }[] }[] = [];
+    for (const [bank, rates] of groupedMap.entries()) {
+      list.push({ bank, rates });
+    }
+    return list;
+  }, [items]);
+
+  const filtered = grouped.filter((f) =>
     f.bank.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -612,33 +663,48 @@ function FDTab({ search, setSearch }: any) {
           <SearchBar value={search} onChange={setSearch} placeholder="Search bank…" />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        {filtered.map((f) => (
-          <Card key={f.bank} className="p-5">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <p className="text-sm font-semibold text-foreground">{f.bank}</p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">{f.type}</p>
-              </div>
-              <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
-                DICGC Insured
-              </span>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              {f.rates.map((r) => (
-                <div key={r.tenure} className="text-center p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.05]">
-                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider mb-1">{r.tenure}</p>
-                  <p className="text-base font-mono font-bold text-foreground">{r.rate}%</p>
-                  <p className="text-[9px] text-muted-foreground mt-0.5">p.a.</p>
+
+      {loading ? (
+        <Card className="p-8">
+          <p className="text-sm text-muted-foreground text-center">Loading fixed deposits…</p>
+        </Card>
+      ) : error ? (
+        <Card className="p-8">
+          <EmptyState icon={<Shield size={24} />} title="Couldn't load fixed deposits" description={error} />
+        </Card>
+      ) : filtered.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<Shield size={24} />}
+            title="No fixed deposits"
+            description={search ? `No banks match "${search}"` : "No fixed deposits available"}
+          />
+        </Card>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          {filtered.map((f) => (
+            <Card key={f.bank} className="p-5">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">{f.bank}</p>
                 </div>
-              ))}
-            </div>
-            <p className="text-[10px] text-muted-foreground mt-3 pt-3 border-t border-white/[0.05]">
-              Min deposit: <span className="font-mono text-foreground">{fmt(f.minDeposit)}</span>
-            </p>
-          </Card>
-        ))}
-      </div>
+                <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
+                  DICGC Insured
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                {f.rates.map((r) => (
+                  <div key={r.tenure} className="text-center p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.05]">
+                    <p className="text-[9px] text-muted-foreground uppercase tracking-wider mb-1">{r.tenure}</p>
+                    <p className="text-base font-mono font-bold text-foreground">{r.rate}%</p>
+                    <p className="text-[9px] text-muted-foreground mt-0.5">p.a.</p>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

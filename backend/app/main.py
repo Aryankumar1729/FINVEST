@@ -1,6 +1,9 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import db
 from .config import CORS_ORIGINS
 from .routers import chat as chat_router
 from .routers import goal as goal_router
@@ -11,7 +14,17 @@ from .routers import portfolio as portfolio_router
 from .routers import profile as profile_router
 from .routers import tax as tax_router
 
-app = FastAPI(title="AI Financial Operating System")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    db.open_pool()
+    try:
+        yield
+    finally:
+        db.close_pool()
+
+
+app = FastAPI(title="AI Financial Operating System", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,3 +47,11 @@ app.include_router(onboarding_router.router, tags=["Onboarding"])
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# TEMPORARY DEBUG ONLY — delete after pool investigation. Not part of the public API.
+@app.get("/_debug/pool-stats")
+def debug_pool_stats() -> dict:
+    if db._pool is None:
+        return {"error": "pool is not open"}
+    return dict(db._pool.get_stats())

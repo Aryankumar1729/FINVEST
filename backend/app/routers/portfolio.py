@@ -8,6 +8,7 @@ from ..schemas import (
     BuyRequest,
     LotResponse,
     PortfolioResponse,
+    PriceHistoryResponse,
     SellAllocationResult,
     SellRequest,
     SellResponse,
@@ -17,12 +18,27 @@ router = APIRouter()
 
 
 @router.get("/portfolio", response_model=PortfolioResponse)
-async def get_portfolio(user_id: str = Query(...)) -> PortfolioResponse:
+def get_portfolio(user_id: str = Query(...)) -> PortfolioResponse:
     return PortfolioResponse(**tools.calculate_overlap_and_concentration(user_id))
 
 
+@router.get("/portfolio/history", response_model=PriceHistoryResponse)
+def get_portfolio_history(
+    user_id: str = Query(...),
+    period: str = Query(default="1y"),
+) -> PriceHistoryResponse:
+    """Proxy portfolio value over time: today's open holdings × historical prices/NAVs."""
+    try:
+        points = tools.calculate_portfolio_history_proxy(user_id, period=period)
+    except ValueError as exc:
+        detail = str(exc)
+        status = 400 if "Unsupported period" in detail else 502
+        raise HTTPException(status_code=status, detail=detail) from exc
+    return PriceHistoryResponse(points=points)
+
+
 @router.post("/portfolio/buy", response_model=LotResponse)
-async def buy(req: BuyRequest) -> LotResponse:
+def buy(req: BuyRequest) -> LotResponse:
     if db.get_user_profile(req.user_id) is None:
         raise HTTPException(status_code=404, detail="User profile not found")
     if req.stock_symbol is not None:
@@ -60,7 +76,7 @@ async def buy(req: BuyRequest) -> LotResponse:
 
 
 @router.post("/portfolio/sell", response_model=SellResponse)
-async def sell(req: SellRequest) -> SellResponse:
+def sell(req: SellRequest) -> SellResponse:
     asset = {"stock_symbol": req.stock_symbol, "mutual_fund_id": req.mutual_fund_id}
     try:
         matched_lots = tools.match_fifo_lots(

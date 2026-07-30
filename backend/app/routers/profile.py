@@ -48,7 +48,7 @@ def _liability_response(row: dict) -> LiabilityResponse:
 
 
 @router.get("/profile", response_model=ProfileResponse)
-async def get_profile(user_id: str = Query(...)) -> ProfileResponse:
+def get_profile(user_id: str = Query(...)) -> ProfileResponse:
     row = db.get_user_profile(user_id)
     if row is None:
         raise HTTPException(status_code=404, detail="User profile not found")
@@ -56,7 +56,7 @@ async def get_profile(user_id: str = Query(...)) -> ProfileResponse:
 
 
 @router.get("/profile/liabilities", response_model=list[LiabilityResponse])
-async def get_liabilities(user_id: str = Query(...)) -> list[LiabilityResponse]:
+def get_liabilities(user_id: str = Query(...)) -> list[LiabilityResponse]:
     if db.get_user_profile(user_id) is None:
         raise HTTPException(status_code=404, detail="User profile not found")
     rows = db.get_user_liabilities(user_id)
@@ -64,7 +64,7 @@ async def get_liabilities(user_id: str = Query(...)) -> list[LiabilityResponse]:
 
 
 @router.put("/profile/salary", response_model=ProfileResponse)
-async def update_salary(req: SalaryUpdateRequest) -> ProfileResponse:
+def update_salary(req: SalaryUpdateRequest) -> ProfileResponse:
     row = db.update_user_profile(
         req.user_id,
         req.salary,
@@ -78,7 +78,7 @@ async def update_salary(req: SalaryUpdateRequest) -> ProfileResponse:
 
 
 @router.put("/profile/liabilities", response_model=list[LiabilityResponse])
-async def update_liabilities(req: LiabilitiesUpdateRequest) -> list[LiabilityResponse]:
+def update_liabilities(req: LiabilitiesUpdateRequest) -> list[LiabilityResponse]:
     if db.get_user_profile(req.user_id) is None:
         raise HTTPException(status_code=404, detail="User profile not found")
     rows = db.replace_user_liabilities(
@@ -88,7 +88,7 @@ async def update_liabilities(req: LiabilitiesUpdateRequest) -> list[LiabilityRes
 
 
 @router.put("/profile/risk/adjust", response_model=ProfileResponse)
-async def adjust_risk(req: RiskAdjustRequest) -> ProfileResponse:
+def adjust_risk(req: RiskAdjustRequest) -> ProfileResponse:
     profile = db.get_user_profile(req.user_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="User profile not found")
@@ -117,7 +117,7 @@ async def adjust_risk(req: RiskAdjustRequest) -> ProfileResponse:
 
 
 @router.post("/profile/risk/questionnaire", response_model=RiskQuestionnaireResponse)
-async def risk_questionnaire(req: RiskQuestionnaireRequest) -> RiskQuestionnaireResponse:
+def risk_questionnaire(req: RiskQuestionnaireRequest) -> RiskQuestionnaireResponse:
     profile = db.get_user_profile(req.user_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="User profile not found")

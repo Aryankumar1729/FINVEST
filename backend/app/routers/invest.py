@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -149,6 +150,13 @@ def _refresh_mf_detail_if_stale(row: dict) -> None:
         return
 
 
+def _fetch_mf_nav_for_list_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Resolve nav_id from row (post-refresh) and fetch live/cached NAV. May raise ValueError."""
+    detail_stats = row.get("detail_stats") or {}
+    nav_id = detail_stats.get("amfi_scheme_code") or row["scheme_name"]
+    return tools.fetch_mf_nav(nav_id, skip_live_if_fresh_seconds=300)
+
+
 def _paginate(rows: list[dict[str, Any]], page: int, page_size: int) -> tuple[list[dict[str, Any]], int, bool, bool]:
     total = len(rows)
     start = (page - 1) * page_size
@@ -188,18 +196,33 @@ async def list_stocks(params: InvestQueryParams = Depends()) -> StockInvestListR
     rows = _resolve_stock_catalog_rows(params)
     page_rows, total, has_prev, has_next = _paginate(rows, params.page, params.page_size)
 
-    for row in page_rows:
-        _refresh_stock_detail_if_stale(row)
+    # Same per-row helper as before (swallows all exceptions internally). Run in
+    # parallel so one slow/failing .info call does not block the others.
+    if page_rows:
+        await asyncio.gather(
+            *(asyncio.to_thread(_refresh_stock_detail_if_stale, row) for row in page_rows)
+        )
 
     symbols = [row["symbol"] for row in page_rows]
-    live_by_symbol = tools.fetch_stock_prices_batch(symbols, skip_live_if_fresh_seconds=300) if symbols else {}
+    live_by_symbol = (
+        await asyncio.to_thread(
+            tools.fetch_stock_prices_batch, symbols, skip_live_if_fresh_seconds=300
+        )
+        if symbols
+        else {}
+    )
 
     items: list[StockInvestResponse] = []
     for row in page_rows:
         live = live_by_symbol.get(row["symbol"]) or {"status": "unavailable"}
         status = live.get("status")
         if status == "ok":
-            db.update_stock_price_fields(row["symbol"], live["price"], live.get("pct_change_today"))
+            await asyncio.to_thread(
+                db.update_stock_price_fields,
+                row["symbol"],
+                live["price"],
+                live.get("pct_change_today"),
+            )
             price, pct_change = live["price"], live.get("pct_change_today")
         elif status in ("stale", "cached"):
             price, pct_change = live["price"], row["pct_change_today"]
@@ -211,6 +234,7 @@ async def list_stocks(params: InvestQueryParams = Depends()) -> StockInvestListR
                 sector=row["sector"],
                 price=price,
                 pct_change=pct_change,
+                is_gold_etf=row["is_gold_etf"],
                 **_stock_detail_kwargs(row),
             )
         )
@@ -225,7 +249,7 @@ async def list_stocks(params: InvestQueryParams = Depends()) -> StockInvestListR
 
 
 @router.get("/invest/stocks/{symbol}", response_model=StockInvestResponse)
-async def get_stock(symbol: str) -> StockInvestResponse:
+def get_stock(symbol: str) -> StockInvestResponse:
     rows = db.list_catalog("stocks", filter_column="symbol", filter_value=symbol)
     if not rows:
         raise HTTPException(status_code=404, detail="Stock not found")
@@ -245,12 +269,13 @@ async def get_stock(symbol: str) -> StockInvestResponse:
         sector=catalog["sector"],
         price=price,
         pct_change=pct_change,
+        is_gold_etf=catalog["is_gold_etf"],
         **_stock_detail_kwargs(catalog),
     )
 
 
 @router.get("/invest/stocks/{symbol}/history", response_model=PriceHistoryResponse)
-async def get_stock_history(
+def get_stock_history(
     symbol: str,
     period: str = Query(default="1y"),
 ) -> PriceHistoryResponse:
@@ -266,7 +291,8 @@ async def get_stock_history(
 
 @router.get("/invest/mf", response_model=MutualFundInvestListResponse)
 async def list_mf(params: InvestQueryParams = Depends()) -> MutualFundInvestListResponse:
-    rows = db.list_catalog(
+    rows = await asyncio.to_thread(
+        db.list_catalog,
         "mutual_funds",
         search_column="scheme_name" if params.search else None,
         search_term=params.search,
@@ -277,17 +303,26 @@ async def list_mf(params: InvestQueryParams = Depends()) -> MutualFundInvestList
     rows.sort(key=lambda r: r["scheme_name"])
     page_rows, total, has_prev, has_next = _paginate(rows, params.page, params.page_size)
 
-    for row in page_rows:
-        _refresh_mf_detail_if_stale(row)
+    # Phase 1 then phase 2 (not merged): loop 2 reads detail_stats.amfi_scheme_code
+    # that phase 1 may populate on this request. Parallelize only within each phase.
+    if page_rows:
+        await asyncio.gather(
+            *(asyncio.to_thread(_refresh_mf_detail_if_stale, row) for row in page_rows)
+        )
+
+    try:
+        live_by_row = (
+            await asyncio.gather(
+                *(asyncio.to_thread(_fetch_mf_nav_for_list_row, row) for row in page_rows)
+            )
+            if page_rows
+            else []
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
 
     items: list[MutualFundInvestResponse] = []
-    for row in page_rows:
-        detail_stats = row.get("detail_stats") or {}
-        nav_id = detail_stats.get("amfi_scheme_code") or row["scheme_name"]
-        try:
-            live = tools.fetch_mf_nav(nav_id, skip_live_if_fresh_seconds=300)
-        except ValueError as e:
-            raise HTTPException(status_code=502, detail=str(e)) from e
+    for row, live in zip(page_rows, live_by_row, strict=True):
         status = live.get("status")
         if status == "ok":
             items.append(
@@ -333,7 +368,7 @@ async def list_mf(params: InvestQueryParams = Depends()) -> MutualFundInvestList
 
 
 @router.get("/invest/mf/{scheme_code}/history", response_model=PriceHistoryResponse)
-async def get_mf_history(
+def get_mf_history(
     scheme_code: str,
     period: str = Query(default="3y"),
 ) -> PriceHistoryResponse:
@@ -348,7 +383,7 @@ async def get_mf_history(
 
 
 @router.get("/invest/mf/{scheme_name}", response_model=MutualFundInvestResponse)
-async def get_mf(scheme_name: str) -> MutualFundInvestResponse:
+def get_mf(scheme_name: str) -> MutualFundInvestResponse:
     rows = db.list_catalog("mutual_funds", filter_column="scheme_name", filter_value=scheme_name)
     if not rows:
         raise HTTPException(status_code=404, detail="Mutual fund not found")
@@ -390,7 +425,7 @@ async def get_mf(scheme_name: str) -> MutualFundInvestResponse:
 
 
 @router.get("/invest/fd", response_model=list[FixedDepositInvestResponse])
-async def list_fd(params: InvestQueryParams = Depends()) -> list[FixedDepositInvestResponse]:
+def list_fd(params: InvestQueryParams = Depends()) -> list[FixedDepositInvestResponse]:
     rows = db.list_catalog(
         "fd_rates",
         search_column="bank_name" if params.search else None,
@@ -409,7 +444,7 @@ async def list_fd(params: InvestQueryParams = Depends()) -> list[FixedDepositInv
 
 
 @router.get("/invest/gold", response_model=list[GoldInvestResponse])
-async def list_gold(params: InvestQueryParams = Depends()) -> list[GoldInvestResponse]:
+def list_gold(params: InvestQueryParams = Depends()) -> list[GoldInvestResponse]:
     # Live-fetch price per gold ETF row (same pattern as list_stocks); fall back to stocks.current_price if unavailable.
     rows = db.list_catalog(
         "stocks",

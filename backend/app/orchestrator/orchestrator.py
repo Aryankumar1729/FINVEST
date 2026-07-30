@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from decimal import Decimal
 from typing import Any
@@ -17,6 +18,7 @@ from .system_prompt import SYSTEM_PROMPT
 
 
 conversation_sessions: dict[str, Any] = {}
+conversation_locks: dict[str, asyncio.Lock] = {}
 
 _OPEN_LOT_VALUE_SELECT = """
     SELECT l.lot_id, l.remaining_quantity, l.stock_symbol, l.mutual_fund_id, l.buy_price,
@@ -28,9 +30,10 @@ _OPEN_LOT_VALUE_SELECT = """
 """
 
 
-def get_or_create_session(conversation_id: str | None) -> tuple[str, Any]:
+def get_or_create_session(conversation_id: str | None) -> tuple[str, Any, asyncio.Lock]:
     if conversation_id and conversation_id in conversation_sessions:
-        return conversation_id, conversation_sessions[conversation_id]
+        lock = conversation_locks.setdefault(conversation_id, asyncio.Lock())
+        return conversation_id, conversation_sessions[conversation_id], lock
     conversation_id = str(uuid4())
     client = get_gemini_client()
     session = client.aio.chats.create(
@@ -38,7 +41,8 @@ def get_or_create_session(conversation_id: str | None) -> tuple[str, Any]:
         config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
     )
     conversation_sessions[conversation_id] = session
-    return conversation_id, session
+    lock = conversation_locks.setdefault(conversation_id, asyncio.Lock())
+    return conversation_id, session, lock
 
 
 def _sum_live_lot_values(rows: list[dict[str, Any]]) -> Decimal:
@@ -50,7 +54,7 @@ def _sum_live_lot_values(rows: list[dict[str, Any]]) -> Decimal:
     return total
 
 
-def build_snapshot(user_id: str) -> str:
+async def build_snapshot(user_id: str) -> str:
     # TEMPORARY — client-supplied and UNVERIFIED until Firebase auth is added. At that point this should be derived from the verified token server-side, not trusted from the request body.
     profile = db.get_user_profile(user_id)
     cash = (profile or {}).get("current_cash_balance")
@@ -62,7 +66,7 @@ def build_snapshot(user_id: str) -> str:
     ]
     liabilities.sort(key=lambda row: row["updated_at"], reverse=True)
     goals = db.fetch_all("SELECT * FROM goals WHERE user_id = %s ORDER BY target_date ASC, goal_id ASC", (user_id,))
-    progress_map = calculate_goal_progress(user_id) if goals else {}
+    progress_map = await calculate_goal_progress(user_id) if goals else {}
 
     lines: list[str] = ["<<<SNAPSHOT>>>"]
     lines += ["[PROFILE]", str(profile or {})]
@@ -105,85 +109,86 @@ def _toolkit() -> tuple[types.Tool, dict[str, Any]]:
 async def handle_chat(user_id: str, message: str, conversation_id: str | None) -> ChatResponse:
     # TEMPORARY — client-supplied and UNVERIFIED until Firebase auth is added. At that point this should be derived from the verified token server-side, not trusted from the request body.
     # Expected caller: routers/chat.py will pass request.user_id straight through until auth lands.
-    conversation_id, session = get_or_create_session(conversation_id)
-    snapshot = build_snapshot(user_id)
+    conversation_id, session, lock = get_or_create_session(conversation_id)
+    snapshot = await build_snapshot(user_id)
     tool, fn_map = _toolkit()
     config = types.GenerateContentConfig(tools=[tool])
     tool_calls_made: list[str] = []
 
-    resp = await session.send_message(f"{snapshot}\n\n[USER_MESSAGE]\n{message}", config=config)
-    for _ in range(12):
-        calls = list(getattr(resp, "function_calls", None) or [])
-        if not calls:
-            text = getattr(resp, "text", None)
-            return ChatResponse(
-                conversation_id=conversation_id,
-                reply=text
-                if text
-                else "I wasn't able to generate a response to that — could you try rephrasing or asking again?",
-                tool_calls_made=tool_calls_made,
-            )
-        parts: list[types.Part] = []
-        for fc in calls:
-            name, args = fc.name, dict(fc.args or {})
-            fn = fn_map.get(name)
-            if not fn:
-                marker = f"TOOL_ERROR: {name} failed: unknown tool"
-                tool_calls_made.append(f"{name}:error")
-                try:
-                    db.write_tool_call_log(
-                        user_id=user_id,
-                        tool_name=name,
-                        args=args,
-                        result_summary="unknown tool",
-                        success=False,
-                    )
-                except Exception:
-                    pass
-                parts.append(types.Part.from_function_response(name=name, response={"error": marker}))
-                continue
-            last_exc: Exception | None = None
-            for attempt in range(2):
-                try:
-                    result = fn(**args)
-                    tool_calls_made.append(f"{name}:ok")
+    async with lock:
+        resp = await session.send_message(f"{snapshot}\n\n[USER_MESSAGE]\n{message}", config=config)
+        for _ in range(12):
+            calls = list(getattr(resp, "function_calls", None) or [])
+            if not calls:
+                text = getattr(resp, "text", None)
+                return ChatResponse(
+                    conversation_id=conversation_id,
+                    reply=text
+                    if text
+                    else "I wasn't able to generate a response to that — could you try rephrasing or asking again?",
+                    tool_calls_made=tool_calls_made,
+                )
+            parts: list[types.Part] = []
+            for fc in calls:
+                name, args = fc.name, dict(fc.args or {})
+                fn = fn_map.get(name)
+                if not fn:
+                    marker = f"TOOL_ERROR: {name} failed: unknown tool"
+                    tool_calls_made.append(f"{name}:error")
                     try:
                         db.write_tool_call_log(
                             user_id=user_id,
                             tool_name=name,
                             args=args,
-                            result_summary=str(result)[:500],
-                            success=True,
+                            result_summary="unknown tool",
+                            success=False,
                         )
                     except Exception:
                         pass
-                    parts.append(types.Part.from_function_response(name=name, response=result))
-                    last_exc = None
-                    break
-                except Exception as exc:
-                    last_exc = exc
-            if last_exc is not None:
-                marker = f"TOOL_ERROR: {name} failed: {last_exc}"
-                tool_calls_made.append(f"{name}:error")
-                try:
-                    db.write_tool_call_log(
-                        user_id=user_id,
-                        tool_name=name,
-                        args=args,
-                        result_summary=marker,
-                        success=False,
-                    )
-                except Exception:
-                    pass
-                parts.append(types.Part.from_function_response(name=name, response={"error": marker}))
-        resp = await session.send_message(parts, config=config)
+                    parts.append(types.Part.from_function_response(name=name, response={"error": marker}))
+                    continue
+                last_exc: Exception | None = None
+                for attempt in range(2):
+                    try:
+                        result = fn(**args)
+                        tool_calls_made.append(f"{name}:ok")
+                        try:
+                            db.write_tool_call_log(
+                                user_id=user_id,
+                                tool_name=name,
+                                args=args,
+                                result_summary=str(result)[:500],
+                                success=True,
+                            )
+                        except Exception:
+                            pass
+                        parts.append(types.Part.from_function_response(name=name, response=result))
+                        last_exc = None
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                if last_exc is not None:
+                    marker = f"TOOL_ERROR: {name} failed: {last_exc}"
+                    tool_calls_made.append(f"{name}:error")
+                    try:
+                        db.write_tool_call_log(
+                            user_id=user_id,
+                            tool_name=name,
+                            args=args,
+                            result_summary=marker,
+                            success=False,
+                        )
+                    except Exception:
+                        pass
+                    parts.append(types.Part.from_function_response(name=name, response={"error": marker}))
+            resp = await session.send_message(parts, config=config)
 
-    text = getattr(resp, "text", None)
-    return ChatResponse(
-        conversation_id=conversation_id,
-        reply=text
-        if text
-        else "I wasn't able to generate a response to that — could you try rephrasing or asking again?",
-        tool_calls_made=tool_calls_made,
-    )
+        text = getattr(resp, "text", None)
+        return ChatResponse(
+            conversation_id=conversation_id,
+            reply=text
+            if text
+            else "I wasn't able to generate a response to that — could you try rephrasing or asking again?",
+            tool_calls_made=tool_calls_made,
+        )
 

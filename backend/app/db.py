@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
 from datetime import date
@@ -10,17 +11,74 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg.types.string import TextLoader
+from psycopg_pool import ConnectionPool
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+_pool: ConnectionPool | None = None
+_logger = logging.getLogger(__name__)
+
+_DEFAULT_POOL_MIN_SIZE = 2
+_DEFAULT_POOL_MAX_SIZE = 10
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        _logger.warning(
+            "Invalid %s=%r; using default %s",
+            name,
+            raw,
+            default,
+        )
+        return default
+
+
+def _configure_connection(conn: psycopg.Connection) -> None:
+    conn.adapters.register_loader("uuid", TextLoader)
+
+
+def open_pool() -> None:
+    """Create and open the process-wide connection pool (call once at app startup)."""
+    global _pool
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set")
+    if _pool is not None:
+        return
+    min_size = _env_int("POOL_MIN_SIZE", _DEFAULT_POOL_MIN_SIZE)
+    max_size = _env_int("POOL_MAX_SIZE", _DEFAULT_POOL_MAX_SIZE)
+    _pool = ConnectionPool(
+        conninfo=DATABASE_URL,
+        kwargs={"row_factory": dict_row},
+        configure=_configure_connection,
+        min_size=min_size,
+        max_size=max_size,
+        open=True,
+    )
+    msg = f"Database pool opened: min_size={min_size} max_size={max_size}"
+    _logger.info(msg)
+    print(msg, flush=True)
+
+
+def close_pool() -> None:
+    """Close the process-wide connection pool (call once at app shutdown)."""
+    global _pool
+    if _pool is None:
+        return
+    _pool.close()
+    _pool = None
+
 
 @contextmanager
 def connect():
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL is not set")
-    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
-        conn.adapters.register_loader("uuid", TextLoader)
+    if _pool is None:
+        raise RuntimeError("Database pool is not open; call open_pool() at startup")
+    with _pool.connection() as conn:
         yield conn
 
 
