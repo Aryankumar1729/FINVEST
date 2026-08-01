@@ -7,6 +7,7 @@ import {
 import { fmt, fmtDecimal } from "../lib/utils";
 import { ChangeChip, Card } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { BuyModal } from "../components/modals/BuyModal";
 import { getMfHistory, getMutualFundDetail, getStockDetail, getStockHistory } from "../lib/api";
 import type {
   CagrPeriod,
@@ -214,9 +215,8 @@ export function StockDetailView({ stock }: { stock: StockInvestResponse }) {
                 <button
                   key={r}
                   onClick={() => setRange(r)}
-                  className={`px-3 py-1 rounded-lg text-[10px] font-semibold transition-all ${
-                    range === r ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"
-                  }`}
+                  className={`px-3 py-1 rounded-lg text-[10px] font-semibold transition-all ${range === r ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"
+                    }`}
                 >
                   {r}
                 </button>
@@ -378,12 +378,14 @@ export function StockDetailView({ stock }: { stock: StockInvestResponse }) {
 
 export function MutualFundDetailView({ fund }: { fund: MutualFundInvestResponse }) {
   const navigate = useNavigate();
+  const { refreshPortfolio } = useApp();
   const onBack = () => navigate("/invest");
   const [range, setRange] = useState<MfChartRange>("3Y");
   const [chartData, setChartData] = useState<HistoryPoint[]>([]);
   const [chartLoading, setChartLoading] = useState(true);
   const [chartError, setChartError] = useState<string | null>(null);
   const [chartUnavailable, setChartUnavailable] = useState(false);
+  const [isBuyModalOpen, setIsBuyModalOpen] = useState(false);
 
   const nav = num(fund.latest_nav);
   const dayPct = fund.pct_change == null ? null : num(fund.pct_change);
@@ -468,10 +470,17 @@ export function MutualFundDetailView({ fund }: { fund: MutualFundInvestResponse 
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <button className="px-5 py-2.5 rounded-xl border border-white/[0.1] text-xs font-semibold text-muted-foreground hover:text-foreground hover:border-white/20 transition-all active:scale-95">
-                Start SIP
+              <button
+                disabled
+                title="Coming soon"
+                className="px-5 py-2.5 rounded-xl border border-white/[0.1] text-xs font-semibold text-muted-foreground/40 cursor-not-allowed transition-all"
+              >
+                Start SIP (Coming soon)
               </button>
-              <button className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-semibold shadow-[0_0_16px_rgba(0,201,122,0.25)] hover:shadow-[0_0_20px_rgba(0,201,122,0.35)] transition-all active:scale-95">
+              <button
+                onClick={() => setIsBuyModalOpen(true)}
+                className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-semibold shadow-[0_0_16px_rgba(0,201,122,0.25)] hover:shadow-[0_0_20px_rgba(0,201,122,0.35)] transition-all active:scale-95"
+              >
                 Lump Sum
               </button>
             </div>
@@ -537,9 +546,8 @@ export function MutualFundDetailView({ fund }: { fund: MutualFundInvestResponse 
                   key={r}
                   onClick={() => setRange(r)}
                   disabled={chartUnavailable}
-                  className={`px-3 py-1 rounded-lg text-[10px] font-semibold transition-all disabled:opacity-40 ${
-                    range === r ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"
-                  }`}
+                  className={`px-3 py-1 rounded-lg text-[10px] font-semibold transition-all disabled:opacity-40 ${range === r ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"
+                    }`}
                 >
                   {r}
                 </button>
@@ -592,9 +600,8 @@ export function MutualFundDetailView({ fund }: { fund: MutualFundInvestResponse 
                 return (
                   <div
                     key={period.key}
-                    className={`p-4 text-center ${i < CAGR_PERIODS.length - 1 ? "border-r border-white/[0.05]" : ""} ${
-                      missing ? "opacity-40" : ""
-                    }`}
+                    className={`p-4 text-center ${i < CAGR_PERIODS.length - 1 ? "border-r border-white/[0.05]" : ""} ${missing ? "opacity-40" : ""
+                      }`}
                   >
                     <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">{period.label}</p>
                     {missing ? (
@@ -674,9 +681,8 @@ export function MutualFundDetailView({ fund }: { fund: MutualFundInvestResponse 
               fund.sectors.map((s, i) => (
                 <div
                   key={`${s.sector}-${i}`}
-                  className={`flex items-center justify-between px-5 py-3.5 ${
-                    i < fund.sectors!.length - 1 ? "border-b border-white/[0.05]" : ""
-                  }`}
+                  className={`flex items-center justify-between px-5 py-3.5 ${i < fund.sectors!.length - 1 ? "border-b border-white/[0.05]" : ""
+                    }`}
                 >
                   <p className="text-xs font-medium text-foreground">{s.sector}</p>
                   <div className="flex items-center gap-4">
@@ -698,6 +704,20 @@ export function MutualFundDetailView({ fund }: { fund: MutualFundInvestResponse 
 
         {/* TODO: holdings exist in the backend's internal FinAPI fetch but aren't exposed on MutualFundInvestResponse yet. */}
       </div>
+      {isBuyModalOpen && (
+        <BuyModal
+          mode="mf"
+          schemeId={fund.scheme_id}
+          name={fund.name}
+          latestNav={nav}
+          isOpen={isBuyModalOpen}
+          onClose={() => setIsBuyModalOpen(false)}
+          onSuccess={() => {
+            setIsBuyModalOpen(false);
+            refreshPortfolio();
+          }}
+        />
+      )}
     </div>
   );
 }

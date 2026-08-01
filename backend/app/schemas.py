@@ -123,6 +123,7 @@ class StockInvestResponse(APIModel):
 
 
 class MutualFundInvestResponse(APIModel):
+    scheme_id: int
     name: str
     risk_category: str
     latest_nav: Decimal | None = None

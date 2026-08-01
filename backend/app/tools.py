@@ -1180,8 +1180,31 @@ def fetch_mf_nav_history(scheme_code: str, *, period: str = "3y") -> list[dict[s
             f"Unsupported period {period!r}; allowed: {', '.join(sorted(MF_HISTORY_PERIOD_DAYS))}"
         )
 
+    url = MFAPI_HISTORY_URL.format(scheme_code=code)
+    max_attempts = 2
+    response = None
+    last_exc = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.get(url, timeout=30)
+            if response.status_code == 502 or (500 <= response.status_code < 600):
+                if attempt < max_attempts:
+                    continue
+            break
+        except requests.exceptions.Timeout as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                continue
+            raise ValueError(f"mfapi.in request failed for scheme {code}: {exc}") from exc
+        except requests.RequestException as exc:
+            raise ValueError(f"mfapi.in request failed for scheme {code}: {exc}") from exc
+
     try:
-        response = requests.get(MFAPI_HISTORY_URL.format(scheme_code=code), timeout=20)
+        if response is None:
+            if last_exc:
+                raise ValueError(f"mfapi.in request failed for scheme {code}: {last_exc}") from last_exc
+            raise ValueError(f"mfapi.in request failed for scheme {code}: No response")
         response.raise_for_status()
         payload = response.json()
     except requests.RequestException as exc:

@@ -128,7 +128,7 @@ export function Dashboard() {
     },
     {
       label: "Unpaid Tax",
-      value: loading || !tax ? "…" : fmt(tax.unpaid_capital_gains_tax),
+      value: loading || !tax ? "…" : fmt(tax.total_liability),
       sub: loading || !tax ? "Loading…" : `AY ${tax.assessment_year}`,
       icon: <Receipt size={15} />,
       accent: false,

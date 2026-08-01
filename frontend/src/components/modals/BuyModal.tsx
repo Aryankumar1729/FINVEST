@@ -14,30 +14,76 @@ function toCatalogSymbol(symbol: string): string {
   return symbol.endsWith(".NS") ? symbol : `${symbol}.NS`;
 }
 
-export function BuyModal() {
+export function BuyModal({
+  mode = "stock",
+  schemeId,
+  name,
+  latestNav,
+  isOpen,
+  onClose,
+  onSuccess,
+}: {
+  mode?: "stock" | "mf";
+  schemeId?: number;
+  name?: string;
+  latestNav?: number;
+  isOpen?: boolean;
+  onClose?: () => void;
+  onSuccess?: () => void;
+} = {}) {
   const { modal, setModal, modalSymbol, modalPrice, setModalPrice, refreshPortfolio } = useApp();
-  if (modal !== "buy") return null;
+
+  const isGlobal = isOpen === undefined;
+  const showModal = isGlobal ? (modal === "buy") : isOpen;
+
+  if (!showModal) return null;
+
+  const handleClose = () => {
+    if (isGlobal) {
+      setModal(null);
+      setModalPrice(undefined);
+    } else {
+      onClose?.();
+    }
+  };
+
+  const handleSuccess = () => {
+    if (isGlobal) {
+      refreshPortfolio();
+    } else {
+      onSuccess?.();
+    }
+  };
 
   return (
     <BuyModalInner
-      key={`${modalSymbol ?? ""}:${modalPrice ?? ""}`}
-      symbol={modalSymbol}
-      initialPrice={modalPrice}
-      onClose={() => {
-        setModal(null);
-        setModalPrice(undefined);
-      }}
-      onSuccess={refreshPortfolio}
+      key={mode === "mf" ? `mf:${schemeId}` : `${modalSymbol ?? ""}:${modalPrice ?? ""}`}
+      mode={mode}
+      schemeId={schemeId}
+      name={name}
+      latestNav={latestNav}
+      symbol={isGlobal ? modalSymbol : undefined}
+      initialPrice={isGlobal ? modalPrice : undefined}
+      onClose={handleClose}
+      onSuccess={handleSuccess}
     />
   );
 }
 
 function BuyModalInner({
+  mode = "stock",
+  schemeId,
+  name,
+  latestNav,
   symbol,
   initialPrice,
   onClose,
   onSuccess,
 }: {
+  mode?: "stock" | "mf";
+  schemeId?: number;
+  name?: string;
+  latestNav?: number;
   symbol?: string;
   initialPrice?: number;
   onClose: () => void;
@@ -49,6 +95,7 @@ function BuyModalInner({
 
   const [selectedSymbol, setSelectedSymbol] = useState(symbol || "");
   const [qty, setQty] = useState("1");
+  const [amountStr, setAmountStr] = useState("");
   const [buyPrice, setBuyPrice] = useState(
     initialPrice != null && !Number.isNaN(initialPrice) ? String(initialPrice) : ""
   );
@@ -68,6 +115,7 @@ function BuyModalInner({
   });
 
   useEffect(() => {
+    if (mode !== "stock") return;
     setCatalogLoading(true);
     setCatalogError(null);
     getStocks({ pageSize: 100 })
@@ -80,9 +128,10 @@ function BuyModalInner({
       .finally(() => {
         setCatalogLoading(false);
       });
-  }, []);
+  }, [mode]);
 
   useEffect(() => {
+    if (mode !== "stock") return;
     if (catalog.length > 0) {
       if (!symbol) {
         // General free-choice flow: default to first equity (no gold ETFs)
@@ -103,11 +152,12 @@ function BuyModalInner({
         }
       }
     }
-  }, [catalog, symbol, initialPrice, selectedSymbol]);
+  }, [catalog, symbol, initialPrice, selectedSymbol, mode]);
 
   // Clear stale selection when search filters the selected symbol out of view.
   // Do NOT auto-pick another symbol — require the user to choose explicitly.
   useEffect(() => {
+    if (mode !== "stock") return;
     if (!symbol && selectedSymbol && searchText) {
       const stillVisible = filteredCatalog.some((s) => s.symbol === selectedSymbol);
       if (!stillVisible) {
@@ -115,12 +165,21 @@ function BuyModalInner({
         setBuyPrice("");
       }
     }
-  }, [filteredCatalog, selectedSymbol, searchText, symbol]);
+  }, [filteredCatalog, selectedSymbol, searchText, symbol, mode]);
 
   const qtyNum = parseFloat(qty) || 0;
   const priceNum = parseFloat(buyPrice) || 0;
-  const total = qtyNum * priceNum;
-  const valid = qtyNum > 0 && priceNum > 0 && Boolean(buyDate) && Boolean(selectedSymbol);
+  const stockTotal = qtyNum * priceNum;
+  const stockValid = qtyNum > 0 && priceNum > 0 && Boolean(buyDate) && Boolean(selectedSymbol);
+
+  const navNum = typeof latestNav === "number" ? latestNav : parseFloat(String(latestNav || "0")) || 0;
+  const amountNum = parseFloat(amountStr) || 0;
+  const computedUnits = navNum > 0 ? (amountNum / navNum) : 0;
+  const roundedUnits = Math.round((computedUnits + Number.EPSILON) * 1e6) / 1e6;
+  const mfValid = amountNum > 0 && navNum > 0 && Boolean(buyDate) && schemeId !== undefined;
+
+  const total = mode === "mf" ? amountNum : stockTotal;
+  const valid = mode === "mf" ? mfValid : stockValid;
 
   const onSymbolChange = (next: string) => {
     setSelectedSymbol(next);
@@ -134,17 +193,30 @@ function BuyModalInner({
     if (!valid) return;
     setLoading(true);
     try {
-      const catalogSymbol = toCatalogSymbol(selectedSymbol);
-      await buyLot({
-        user_id: CURRENT_USER_ID,
-        stock_symbol: catalogSymbol,
-        buy_price: priceNum,
-        buy_date: buyDate,
-        quantity: qtyNum,
-      });
-      onClose();
-      onSuccess();
-      toast.success(`Bought ${qty} share${qtyNum > 1 ? "s" : ""} of ${catalogSymbol}`);
+      if (mode === "mf") {
+        await buyLot({
+          user_id: CURRENT_USER_ID,
+          mutual_fund_id: schemeId,
+          buy_price: navNum,
+          buy_date: buyDate,
+          quantity: roundedUnits,
+        });
+        onClose();
+        onSuccess();
+        toast.success(`Successfully invested ${fmt(amountNum)} in ${name}`);
+      } else {
+        const catalogSymbol = toCatalogSymbol(selectedSymbol);
+        await buyLot({
+          user_id: CURRENT_USER_ID,
+          stock_symbol: catalogSymbol,
+          buy_price: priceNum,
+          buy_date: buyDate,
+          quantity: qtyNum,
+        });
+        onClose();
+        onSuccess();
+        toast.success(`Bought ${qty} share${qtyNum > 1 ? "s" : ""} of ${catalogSymbol}`);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Buy failed");
     } finally {
@@ -152,7 +224,7 @@ function BuyModalInner({
     }
   };
 
-  if (catalogLoading && catalog.length === 0) {
+  if (mode === "stock" && catalogLoading && catalog.length === 0) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ animation: "fadeIn 0.15s ease" }}>
         <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
@@ -183,7 +255,7 @@ function BuyModalInner({
     );
   }
 
-  if (catalogError && catalog.length === 0) {
+  if (mode === "stock" && catalogError && catalog.length === 0) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ animation: "fadeIn 0.15s ease" }}>
         <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
@@ -230,7 +302,9 @@ function BuyModalInner({
             <div className="w-7 h-7 rounded-lg bg-primary/15 border border-primary/20 flex items-center justify-center">
               <TrendingUp size={13} className="text-primary" />
             </div>
-            <p className="text-sm font-semibold text-foreground">Buy Stock</p>
+            <p className="text-sm font-semibold text-foreground">
+              {mode === "mf" ? "Invest in Mutual Fund" : "Buy Stock"}
+            </p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-lg hover:bg-white/[0.05]">
             <X size={14} />
@@ -239,61 +313,101 @@ function BuyModalInner({
 
         <div className="px-6 py-5 flex flex-col gap-4">
           <div>
-            <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">Stock</label>
-            {symbol ? (
-              <div className="px-3 py-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] font-mono text-sm text-foreground">
-                {toCatalogSymbol(symbol)}
-              </div>
+            {mode === "mf" ? (
+              <>
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">Mutual Fund</label>
+                <div className="px-3 py-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] text-sm text-foreground">
+                  {name}
+                </div>
+              </>
             ) : (
-              <div className="flex flex-col gap-2">
-                <SearchBar
-                  value={searchText}
-                  onChange={setSearchText}
-                  placeholder="Search symbol or company..."
-                />
-                <Select value={selectedSymbol} onChange={(e) => onSymbolChange(e.target.value)}>
-                  {filteredCatalog.length === 0 ? (
-                    <option value="" disabled>No stocks found</option>
-                  ) : (
-                    filteredCatalog.map((s) => (
-                      <option key={s.symbol} value={s.symbol}>
-                        {s.symbol} — {s.name ?? "Unknown"}
-                      </option>
-                    ))
-                  )}
-                </Select>
-              </div>
+              <>
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">Stock</label>
+                {symbol ? (
+                  <div className="px-3 py-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] font-mono text-sm text-foreground">
+                    {toCatalogSymbol(symbol)}
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <SearchBar
+                      value={searchText}
+                      onChange={setSearchText}
+                      placeholder="Search symbol or company..."
+                    />
+                    <Select value={selectedSymbol} onChange={(e) => onSymbolChange(e.target.value)}>
+                      {filteredCatalog.length === 0 ? (
+                        <option value="" disabled>No stocks found</option>
+                      ) : (
+                        filteredCatalog.map((s) => (
+                          <option key={s.symbol} value={s.symbol}>
+                            {s.symbol} — {s.name ?? "Unknown"}
+                          </option>
+                        ))
+                      )}
+                    </Select>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">Buy price</label>
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                value={buyPrice}
-                onChange={(e) => setBuyPrice(e.target.value)}
-                className="font-mono"
-              />
+              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">
+                {mode === "mf" ? "NAV (₹)" : "Buy price"}
+              </label>
+              {mode === "mf" ? (
+                <div className="px-3 py-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] font-mono text-sm text-foreground">
+                  {navNum}
+                </div>
+              ) : (
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={buyPrice}
+                  onChange={(e) => setBuyPrice(e.target.value)}
+                  className="font-mono"
+                />
+              )}
             </div>
             <div>
-              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">Buy date</label>
+              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">
+                {mode === "mf" ? "Investment date" : "Buy date"}
+              </label>
               <Input type="date" value={buyDate} onChange={(e) => setBuyDate(e.target.value)} />
             </div>
           </div>
 
           <div>
-            <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">Quantity (shares)</label>
-            <Input
-              type="number"
-              min="1"
-              value={qty}
-              onChange={(e) => setQty(e.target.value)}
-              placeholder="Enter quantity"
-              className="font-mono text-lg"
-            />
+            {mode === "mf" ? (
+              <>
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">Amount (₹)</label>
+                <Input
+                  type="number"
+                  min="1"
+                  value={amountStr}
+                  onChange={(e) => setAmountStr(e.target.value)}
+                  placeholder="Enter amount"
+                  className="font-mono text-lg"
+                />
+                <div className="mt-1.5 text-xs text-muted-foreground font-mono">
+                  Units: {navNum > 0 ? roundedUnits.toFixed(6) : "0.000000"}
+                </div>
+              </>
+            ) : (
+              <>
+                <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">Quantity (shares)</label>
+                <Input
+                  type="number"
+                  min="1"
+                  value={qty}
+                  onChange={(e) => setQty(e.target.value)}
+                  placeholder="Enter quantity"
+                  className="font-mono text-lg"
+                />
+              </>
+            )}
           </div>
 
           <div className="flex items-center justify-between p-4 rounded-xl bg-primary/[0.06] border border-primary/20">
@@ -305,7 +419,7 @@ function BuyModalInner({
         <div className="flex gap-3 px-6 py-4 border-t border-white/[0.06]">
           <GhostButton onClick={onClose} className="flex-1">Cancel</GhostButton>
           <PrimaryButton onClick={submit} disabled={!valid || loading} className="flex-1">
-            {loading ? "Processing…" : `Buy ${qty} Share${qtyNum !== 1 ? "s" : ""}`}
+            {loading ? "Processing…" : mode === "mf" ? `Invest ${fmt(amountNum)}` : `Buy ${qty} Share${qtyNum !== 1 ? "s" : ""}`}
           </PrimaryButton>
         </div>
       </div>

@@ -150,11 +150,11 @@ export function Select({ className, children, ...props }: React.SelectHTMLAttrib
 
 // ─── Button variants ─────────────────────────────────────────────────────────
 export function PrimaryButton({ children, className, disabled, onClick }: {
-  children: React.ReactNode; className?: string; disabled?: boolean; onClick?: () => void;
+  children: React.ReactNode; className?: string; disabled?: boolean; onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   return (
     <button
-      onClick={onClick}
+      onClick={(e) => onClick?.(e)}
       disabled={disabled}
       className={cn(
         "px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold",
@@ -169,11 +169,11 @@ export function PrimaryButton({ children, className, disabled, onClick }: {
 }
 
 export function GhostButton({ children, className, onClick }: {
-  children: React.ReactNode; className?: string; onClick?: () => void;
+  children: React.ReactNode; className?: string; onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   return (
     <button
-      onClick={onClick}
+      onClick={(e) => onClick?.(e)}
       className={cn(
         "px-5 py-2.5 rounded-xl border border-white/[0.08] text-sm text-muted-foreground",
         "hover:text-foreground hover:border-white/20 active:scale-[0.98] transition-all duration-150",
@@ -186,11 +186,11 @@ export function GhostButton({ children, className, onClick }: {
 }
 
 export function OutlineButton({ children, className, onClick, disabled }: {
-  children: React.ReactNode; className?: string; onClick?: () => void; disabled?: boolean;
+  children: React.ReactNode; className?: string; onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void; disabled?: boolean;
 }) {
   return (
     <button
-      onClick={onClick}
+      onClick={(e) => onClick?.(e)}
       disabled={disabled}
       className={cn(
         "px-3 py-1.5 rounded-lg border border-primary/30 text-xs font-semibold text-primary",

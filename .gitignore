@@ -82,3 +82,6 @@ _tmp_*.py
 *.local
 .chroma/
 .ipynb_checkpoints/
+
+# ── Scratch ───────────────────────────────────────────────────────────────────
+scratch/

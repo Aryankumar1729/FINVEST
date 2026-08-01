@@ -81,6 +81,7 @@ def _mf_extra_from_live(live: dict[str, Any] | None) -> dict[str, Any]:
 def _mf_catalog_only(row: dict) -> MutualFundInvestResponse:
     # NAV fields not populated until a background NAV-refresh job exists.
     return MutualFundInvestResponse(
+        scheme_id=row["scheme_id"],
         name=row["scheme_name"],
         risk_category=row["risk_category"],
         cagr=row["cagr"],
@@ -193,7 +194,7 @@ def _resolve_stock_catalog_rows(params: InvestQueryParams) -> list[dict[str, Any
 
 @router.get("/invest/stocks", response_model=StockInvestListResponse)
 async def list_stocks(params: InvestQueryParams = Depends()) -> StockInvestListResponse:
-    rows = _resolve_stock_catalog_rows(params)
+    rows = await asyncio.to_thread(_resolve_stock_catalog_rows, params)
     page_rows, total, has_prev, has_next = _paginate(rows, params.page, params.page_size)
 
     # Same per-row helper as before (swallows all exceptions internally). Run in
@@ -327,6 +328,7 @@ async def list_mf(params: InvestQueryParams = Depends()) -> MutualFundInvestList
         if status == "ok":
             items.append(
                 MutualFundInvestResponse(
+                    scheme_id=row["scheme_id"],
                     name=row["scheme_name"],
                     risk_category=row["risk_category"],
                     cagr=row["cagr"],
@@ -342,6 +344,7 @@ async def list_mf(params: InvestQueryParams = Depends()) -> MutualFundInvestList
         elif status in ("stale", "cached"):
             items.append(
                 MutualFundInvestResponse(
+                    scheme_id=row["scheme_id"],
                     name=row["scheme_name"],
                     risk_category=row["risk_category"],
                     cagr=row["cagr"],
@@ -397,6 +400,7 @@ def get_mf(scheme_name: str) -> MutualFundInvestResponse:
     status = live.get("status")
     if status == "ok":
         return MutualFundInvestResponse(
+            scheme_id=catalog["scheme_id"],
             name=catalog["scheme_name"],
             risk_category=catalog["risk_category"],
             cagr=catalog["cagr"],
@@ -410,6 +414,7 @@ def get_mf(scheme_name: str) -> MutualFundInvestResponse:
         )
     if status == "stale":
         return MutualFundInvestResponse(
+            scheme_id=catalog["scheme_id"],
             name=catalog["scheme_name"],
             risk_category=catalog["risk_category"],
             cagr=catalog["cagr"],
