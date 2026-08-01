@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { PrimaryButton, GhostButton, Input, Select, Card } from "../components/ui";
 import { Wallet, Shield, TrendingUp, CheckCircle } from "lucide-react";
-import { riskQuestions } from "../lib/data";
+import { RISK_QUESTIONNAIRE, RISK_SECTIONS } from "../lib/risk-questionnaire";
 import { markOnboardingComplete, submitOnboarding } from "../lib/onboarding";
 import { CURRENT_USER_ID } from "../lib/constants";
 import { toast } from "sonner";
@@ -25,8 +25,8 @@ export function Onboarding() {
     dob: "",
     employment: "Salaried",
     annualIncome: "",
-    riskChoice: "",
   });
+  const [riskAnswers, setRiskAnswers] = useState<Record<string, number>>({});
 
   const update = (f: string, v: string) => setForm((p) => ({ ...p, [f]: v }));
   const next = () => setStep((s) => s + 1);
@@ -56,6 +56,7 @@ export function Onboarding() {
         current_cash_balance: 0, // TEMPORARY: hardcoded default, onboarding UI doesn't collect this yet
         liabilities: [], // TEMPORARY: hardcoded default, onboarding UI doesn't collect this yet
         self_report_answers: selfReportAnswers,
+        risk_answers: riskAnswers,
       });
       markOnboardingComplete();
       navigate("/");
@@ -133,8 +134,8 @@ export function Onboarding() {
           {step === 2 && <FinancialStep form={form} update={update} onNext={next} onBack={prev} />}
           {step === 3 && (
             <RiskStep
-              form={form}
-              update={update}
+              answers={riskAnswers}
+              setAnswers={setRiskAnswers}
               onFinish={handleFinish}
               onBack={prev}
             />
@@ -218,78 +219,130 @@ function FinancialStep({ form, update, onNext, onBack }: any) {
   );
 }
 
-function RiskStep({ update, onFinish, onBack }: any) {
-  const [current, setCurrent] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, number>>({});
+interface RiskStepProps {
+  answers: Record<string, number>;
+  setAnswers: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  onFinish: () => void;
+  onBack: () => void;
+}
 
-  const total = riskQuestions.length;
-  const pct = ((current + 1) / total) * 100;
-  const q = riskQuestions[current];
+function RiskStep({ answers, setAnswers, onFinish, onBack }: RiskStepProps) {
+  const [sectionIndex, setSectionIndex] = useState(0);
+  const activeSection = RISK_SECTIONS[sectionIndex];
+  
+  // Filter questions for the active section
+  const sectionQuestions = RISK_QUESTIONNAIRE.filter((q) => q.section === activeSection.id);
+  
+  // Check if all questions in the current section have answers
+  const isSectionComplete = sectionQuestions.every((q) => answers[q.id] !== undefined);
+  
+  // Check if all 18 questions in total are answered
+  const isAllComplete = RISK_QUESTIONNAIRE.every((q) => answers[q.id] !== undefined);
 
-  const pick = (qi: number, opt: number) => {
-    const next = { ...answers, [qi]: opt };
-    setAnswers(next);
-    if (qi < total - 1) {
-      setTimeout(() => setCurrent(qi + 1), 280);
-    } else {
-      const sum = Object.values(next).reduce((a, v) => a + v, 0);
-      const max = (total - 1) * 3;
-      const score = sum / max;
-      const tier = score >= 0.67 ? "High" : score >= 0.34 ? "Moderate" : "Low";
-      update("riskChoice", tier);
-      setTimeout(onFinish, 280);
+  const handleSelect = (questionId: string, value: number) => {
+    setAnswers((prev) => ({
+      ...prev,
+      [questionId]: value,
+    }));
+  };
+
+  const handleNextSection = () => {
+    if (sectionIndex < RISK_SECTIONS.length - 1) {
+      setSectionIndex((prev) => prev + 1);
+    } else if (isAllComplete) {
+      onFinish();
     }
   };
+
+  const handlePrevSection = () => {
+    if (sectionIndex > 0) {
+      setSectionIndex((prev) => prev - 1);
+    } else {
+      onBack();
+    }
+  };
+
+  const totalSections = RISK_SECTIONS.length;
+  const pct = ((sectionIndex + 1) / totalSections) * 100;
 
   return (
     <div>
       <h2 className="text-2xl font-semibold text-foreground mb-1">Risk Appetite</h2>
-      <p className="text-sm text-muted-foreground mb-6">Answer a few questions so we can understand your comfort with risk.</p>
+      <p className="text-sm text-muted-foreground mb-6">
+        Section {sectionIndex + 1} of {totalSections}: {activeSection.title}
+      </p>
 
       {/* Progress */}
       <div className="flex items-center justify-between mb-1.5">
         <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-          Question {current + 1} of {total}
+          Step {sectionIndex + 1} of {totalSections}
         </p>
         <p className="text-[10px] font-mono text-primary">{Math.round(pct)}%</p>
       </div>
       <div className="w-full h-0.5 bg-white/[0.06] rounded-full mb-7">
-        <div className="h-full bg-primary rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
+        <div
+          className="h-full bg-primary rounded-full transition-all duration-500"
+          style={{ width: `${pct}%` }}
+        />
       </div>
 
-      {/* Question */}
-      <p className="text-base font-semibold text-foreground mb-1">{q.question}</p>
-      <p className="text-xs text-muted-foreground mb-5">{q.description}</p>
-
-      {/* Options */}
-      <div className="flex flex-col gap-2.5">
-        {q.options.map((opt, i) => {
-          const selected = answers[current] === i;
+      {/* Questions inside the current section */}
+      <div className="flex flex-col gap-6 max-h-[350px] overflow-y-auto pr-1">
+        {sectionQuestions.map((q) => {
+          const selectedVal = answers[q.id];
           return (
-            <button
-              key={i}
-              onClick={() => pick(current, i)}
-              className={`text-left px-4 py-3 rounded-xl border transition-all duration-150 active:scale-[0.99] ${
-                selected
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-white/[0.07] bg-white/[0.03] text-foreground hover:border-white/20 hover:bg-white/[0.05]"
-              }`}
+            <div
+              key={q.id}
+              className="p-4 rounded-xl border border-white/[0.05] bg-white/[0.02]"
             >
-              <div className="flex items-center gap-3">
-                <div className={`w-3.5 h-3.5 rounded-full border-2 shrink-0 flex items-center justify-center transition-all ${
-                  selected ? "border-primary bg-primary" : "border-muted-foreground/30"
-                }`}>
-                  {selected && <div className="w-1.5 h-1.5 rounded-full bg-background" />}
-                </div>
-                <span className="text-sm font-medium">{opt}</span>
+              <p className="text-sm font-semibold text-foreground mb-3">{q.prompt}</p>
+
+              {/* 1-5 Likert scale buttons */}
+              <div className="flex justify-between items-center gap-1.5 mb-2.5">
+                {[1, 2, 3, 4, 5].map((val) => {
+                  const isSelected = selectedVal === val;
+                  return (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => handleSelect(q.id, val)}
+                      className={`w-9 h-9 rounded-lg border text-xs font-semibold transition-all duration-150 active:scale-95 ${
+                        isSelected
+                          ? "border-primary bg-primary/10 text-primary shadow-[0_0_14px_rgba(0,201,122,0.25)] scale-105"
+                          : "border-white/[0.07] bg-white/[0.03] text-muted-foreground hover:text-foreground hover:bg-white/[0.06] hover:border-white/20"
+                      }`}
+                    >
+                      {val}
+                    </button>
+                  );
+                })}
               </div>
-            </button>
+
+              {/* Endpoint labels */}
+              <div className="flex justify-between text-[10px] text-muted-foreground/60 font-medium px-1">
+                <span className="max-w-[48%] truncate" title={q.lowLabel}>
+                  {q.lowLabel}
+                </span>
+                <span className="max-w-[48%] text-right truncate" title={q.highLabel}>
+                  {q.highLabel}
+                </span>
+              </div>
+            </div>
           );
         })}
       </div>
 
-      <div className="mt-8">
-        <GhostButton onClick={onBack} className="w-full">Back</GhostButton>
+      <div className="flex gap-3 mt-8">
+        <GhostButton onClick={handlePrevSection} className="flex-1">
+          Back
+        </GhostButton>
+        <PrimaryButton
+          onClick={handleNextSection}
+          disabled={!isSectionComplete}
+          className="flex-1"
+        >
+          {sectionIndex === totalSections - 1 ? "Finish" : "Next Section"}
+        </PrimaryButton>
       </div>
     </div>
   );
