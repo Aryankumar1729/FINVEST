@@ -1637,11 +1637,11 @@ def generate_goal_strategy_variants(
     return variants
 
 
-_STOCK_REC_CACHE: dict[str, tuple[datetime, list[str]]] = {}
+_STOCK_REC_CACHE: dict[str, tuple[datetime, list[dict[str, str]]]] = {}
 _STOCK_REC_CACHE_TTL = timedelta(minutes=15)
 
 
-def generate_stock_recommendations(user_id: str) -> list[str]:
+def generate_stock_recommendations(user_id: str) -> list[dict[str, str]]:
     now = datetime.now(timezone.utc)
     if user_id in _STOCK_REC_CACHE:
         cached_time, recs = _STOCK_REC_CACHE[user_id]
@@ -1665,7 +1665,7 @@ def generate_stock_recommendations(user_id: str) -> list[str]:
         "analyzed against general market, sector, and history knowledge.\n"
         f"Only return symbols from this exact list of available symbols: {symbol_string}. "
         "Do not invent, modify, or suggest any symbol not in this list.\n"
-        "Return ONLY a JSON array of stock symbol strings, nothing else, no objects, no extra keys.\n"
+        "Return ONLY a JSON array of objects, each with exactly three keys: symbol (must be from the available list), confidence (must be exactly \"High\" or \"Moderate\"), and reason (a single concise sentence, max ~20 words, explaining why this stock fits this user's profile/goals/holdings). No other text, markdown, or keys.\n"
         f"profile_salary={profile.get('salary')}\n"
         f"profile_risk_tier={profile.get('risk_tier')}\n"
         f"profile_cash_balance={profile.get('current_cash_balance')}\n"
@@ -1687,15 +1687,26 @@ def generate_stock_recommendations(user_id: str) -> list[str]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"Gemini stock recommendations JSON parse failed: {exc}") from exc
     if not isinstance(parsed, list):
-        raise ValueError(f"Expected a JSON array of stock symbols, got {type(parsed).__name__}: {parsed!r}")
-    if not all(isinstance(item, str) for item in parsed):
-        raise ValueError(f"Expected every item to be a str, got {[type(i).__name__ for i in parsed]}: {parsed!r}")
+        raise ValueError(f"Expected a JSON array, got {type(parsed).__name__}: {parsed!r}")
+    
+    for item in parsed:
+        if not isinstance(item, dict):
+            raise ValueError(f"Expected each item to be a dict, got {type(item).__name__}: {item!r}")
+        if set(item.keys()) != {"symbol", "confidence", "reason"}:
+            raise ValueError(f"Expected keys to be exactly {{'symbol', 'confidence', 'reason'}}, got: {list(item.keys())}")
+        if not isinstance(item["symbol"], str):
+            raise ValueError(f"Expected symbol to be a str, got {type(item['symbol']).__name__}")
+        if item["confidence"] not in ("High", "Moderate"):
+            raise ValueError(f"Expected confidence to be 'High' or 'Moderate', got {item['confidence']!r}")
+        if not isinstance(item["reason"], str) or not item["reason"].strip():
+            raise ValueError(f"Expected reason to be a non-empty str, got {item['reason']!r}")
+
     if not (5 <= len(parsed) <= 10):
-        raise ValueError(f"Expected 5 to 10 stock symbols, got {len(parsed)}: {parsed!r}")
+        raise ValueError(f"Expected 5 to 10 stock recommendations, got {len(parsed)}: {parsed!r}")
 
     # Drop hallucinated tickers silently — a stray invented symbol shouldn't fail the whole recommendation;
     # the returned list is only as trustworthy as the real catalog.
-    filtered = [symbol for symbol in parsed if symbol in symbol_set]
+    filtered = [item for item in parsed if item["symbol"] in symbol_set]
     if not (5 <= len(filtered) <= 10):
         raise ValueError(
             f"After filtering hallucinated symbols, only {len(filtered)} valid recommendations "

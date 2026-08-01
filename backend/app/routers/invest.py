@@ -167,7 +167,8 @@ def _paginate(rows: list[dict[str, Any]], page: int, page_size: int) -> tuple[li
     return page_rows, total, has_prev, has_next
 
 
-def _resolve_stock_catalog_rows(params: InvestQueryParams) -> list[dict[str, Any]]:
+def _resolve_stock_catalog_rows(params: InvestQueryParams) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+    rec_lookup: dict[str, dict[str, str]] = {}
     if params.search:
         rows = db.list_catalog(
             "stocks",
@@ -178,23 +179,22 @@ def _resolve_stock_catalog_rows(params: InvestQueryParams) -> list[dict[str, Any
         )
     elif params.user_id:
         try:
-            symbols = tools.generate_stock_recommendations(params.user_id)
+            recommendations = tools.generate_stock_recommendations(params.user_id)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Stock recommendation generation failed: {exc}") from exc
         catalog_rows = db.list_catalog("stocks", sort_column=None, sort_order="asc")
-        by_symbol = {row["symbol"]: row for row in catalog_rows}
-        recommended = set(symbols)
-        rows = [row for row in catalog_rows if row["symbol"] in recommended]
+        rec_lookup = {item["symbol"]: item for item in recommendations}
+        rows = [row for row in catalog_rows if row["symbol"] in rec_lookup]
     else:
         rows = db.list_catalog("stocks", sort_column=None, sort_order="asc")
     # Stable pagination key — always symbol ASC regardless of sort_by.
     rows.sort(key=lambda r: r["symbol"])
-    return rows
+    return rows, rec_lookup
 
 
 @router.get("/invest/stocks", response_model=StockInvestListResponse)
 async def list_stocks(params: InvestQueryParams = Depends()) -> StockInvestListResponse:
-    rows = await asyncio.to_thread(_resolve_stock_catalog_rows, params)
+    rows, rec_lookup = await asyncio.to_thread(_resolve_stock_catalog_rows, params)
     page_rows, total, has_prev, has_next = _paginate(rows, params.page, params.page_size)
 
     # Same per-row helper as before (swallows all exceptions internally). Run in
@@ -229,6 +229,11 @@ async def list_stocks(params: InvestQueryParams = Depends()) -> StockInvestListR
             price, pct_change = live["price"], row["pct_change_today"]
         else:
             price, pct_change = row["current_price"], row["pct_change_today"]
+        
+        rec_item = rec_lookup.get(row["symbol"])
+        confidence = rec_item["confidence"] if rec_item else None
+        reason = rec_item["reason"] if rec_item else None
+
         items.append(
             StockInvestResponse(
                 symbol=row["symbol"],
@@ -236,6 +241,8 @@ async def list_stocks(params: InvestQueryParams = Depends()) -> StockInvestListR
                 price=price,
                 pct_change=pct_change,
                 is_gold_etf=row["is_gold_etf"],
+                confidence=confidence,
+                reason=reason,
                 **_stock_detail_kwargs(row),
             )
         )
