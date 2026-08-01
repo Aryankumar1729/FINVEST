@@ -254,7 +254,7 @@ function StocksTab({
           <div className="grid grid-cols-4 gap-3">
             {recStocks.map((r) => {
               const price = r.price == null ? 0 : num(r.price);
-              const change = r.pct_change == null ? 0 : num(r.pct_change);
+              const change = r.pct_change_today == null ? 0 : num(r.pct_change_today);
               return (
                 <Card
                   key={r.symbol}
@@ -275,7 +275,7 @@ function StocksTab({
                   <p className="text-base font-mono font-bold text-foreground mb-1">
                     {r.price == null ? "—" : fmt(price)}
                   </p>
-                  {r.pct_change == null ? (
+                  {r.pct_change_today == null ? (
                     <span className="text-xs text-muted-foreground">N/A</span>
                   ) : (
                     <ChangeChip value={change} />
@@ -329,7 +329,7 @@ function StocksTab({
                 </TableHeader>
                 {stocks.map((s, i) => {
                   const price = num(s.price);
-                  const change = num(s.pct_change);
+                  const change = num(s.pct_change_today);
                   const high52 = num(s.fifty_two_week_high);
                   return (
                     <div
@@ -347,7 +347,7 @@ function StocksTab({
                         {s.price == null ? "—" : fmt(price)}
                       </p>
                       <div className="text-right">
-                        {s.pct_change == null ? (
+                        {s.pct_change_today == null ? (
                           <span className="text-xs text-muted-foreground">N/A</span>
                         ) : (
                           <ChangeChip value={change} />
