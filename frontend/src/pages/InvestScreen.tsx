@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { aiRecs } from "../lib/data";
+import { CURRENT_USER_ID } from "../lib/constants";
 import { fmt } from "../lib/utils";
 import {
   ChangeChip, SectionHeader, Card, TableContainer,
@@ -154,6 +154,9 @@ function StocksTab({
   openBuy: (symbol?: string, price?: number) => void;
   onSelectStock: (symbol: string) => void;
 }) {
+  const [recStocks, setRecStocks] = useState<StockInvestResponse[]>([]);
+  const [recLoading, setRecLoading] = useState(true);
+
   const [stocks, setStocks] = useState<StockInvestResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -162,6 +165,28 @@ function StocksTab({
   const [total, setTotal] = useState(0);
   const [listVisible, setListVisible] = useState(true);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRecLoading(true);
+    getStocks({ userId: CURRENT_USER_ID, pageSize: 10 })
+      .then((res) => {
+        if (!cancelled) {
+          setRecStocks(res.items);
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("Failed to load AI recommendations:", err);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRecLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -217,28 +242,52 @@ function StocksTab({
           <Sparkles size={13} className="text-primary" />
           <p className="text-xs font-semibold text-foreground uppercase tracking-wider">AI Picks</p>
         </div>
-        <div className="grid grid-cols-4 gap-3">
-          {aiRecs.map((r) => (
-            <Card
-              key={r.symbol}
-              className="p-4 hover:border-primary/20 transition-colors cursor-pointer"
-              onClick={() => onSelectStock(r.symbol)}
-            >
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <p className="text-xs font-mono font-bold text-foreground tracking-wide">{r.symbol}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug truncate max-w-[80px]">{r.name}</p>
-                </div>
-                <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
-                  r.confidence === "High" ? "bg-emerald-500/12 text-emerald-400" : "bg-amber-500/12 text-amber-400"
-                }`}>{r.confidence}</span>
-              </div>
-              <p className="text-base font-mono font-bold text-foreground mb-1">{fmt(r.price)}</p>
-              <ChangeChip value={r.change} />
-              <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">{r.reason}</p>
-            </Card>
-          ))}
-        </div>
+        {recLoading ? (
+          <Card className="p-6">
+            <p className="text-xs text-muted-foreground text-center animate-pulse">Loading AI recommendations…</p>
+          </Card>
+        ) : recStocks.length === 0 ? (
+          <Card className="p-6">
+            <p className="text-xs text-muted-foreground text-center">No recommendations available</p>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-4 gap-3">
+            {recStocks.map((r) => {
+              const price = r.price == null ? 0 : num(r.price);
+              const change = r.pct_change == null ? 0 : num(r.pct_change);
+              return (
+                <Card
+                  key={r.symbol}
+                  className="p-4 hover:border-primary/20 transition-colors cursor-pointer"
+                  onClick={() => onSelectStock(r.symbol)}
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <p className="text-xs font-mono font-bold text-foreground tracking-wide">{r.symbol}</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug truncate max-w-[80px]">{r.name ?? "—"}</p>
+                    </div>
+                    {r.confidence && (
+                      <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
+                        r.confidence === "High" ? "bg-emerald-500/12 text-emerald-400" : "bg-amber-500/12 text-amber-400"
+                      }`}>{r.confidence}</span>
+                    )}
+                  </div>
+                  <p className="text-base font-mono font-bold text-foreground mb-1">
+                    {r.price == null ? "—" : fmt(price)}
+                  </p>
+                  {r.pct_change == null ? (
+                    <span className="text-xs text-muted-foreground">N/A</span>
+                  ) : (
+                    <ChangeChip value={change} />
+                  )}
+                  {r.reason && (
+                    <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">{r.reason}</p>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div>
