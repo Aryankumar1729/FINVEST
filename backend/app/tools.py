@@ -1083,7 +1083,12 @@ def calculate_overlap_and_concentration(user_id: str) -> dict[str, Any]:
         else:
             mf_total += value
             detail_stats = row.get("detail_stats") or {}
-            finapi_ref = detail_stats.get("finapi_scheme_code") or detail_stats.get("scheme_code") or row.get("scheme_name")
+            finapi_ref = (
+                detail_stats.get("finapi_scheme_code")
+                or detail_stats.get("scheme_code")
+                or detail_stats.get("amfi_scheme_code")
+                or row.get("scheme_name")
+            )
             overlap = fetch_finapi_overlap(str(finapi_ref))
             overlap_pct = _d(overlap.get("overlap_pct") or 0)
             overlap_weighted += value * overlap_pct
