@@ -82,6 +82,12 @@ _tmp_*.py
 *.local
 .chroma/
 .ipynb_checkpoints/
+database/finance.db
 
 # ── Scratch ───────────────────────────────────────────────────────────────────
 scratch/
+
+# ── Verification recordings (keep static images, exclude videos) ──────────────
+frontend/verification-screenshots/*.mp4
+frontend/verification-screenshots/*.webm
+frontend/verification-screenshots/*.webp
