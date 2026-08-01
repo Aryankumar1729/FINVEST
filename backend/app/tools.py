@@ -1637,7 +1637,20 @@ def generate_goal_strategy_variants(
     return variants
 
 
+_STOCK_REC_CACHE: dict[str, tuple[datetime, list[str]]] = {}
+_STOCK_REC_CACHE_TTL = timedelta(minutes=15)
+
+
 def generate_stock_recommendations(user_id: str) -> list[str]:
+    now = datetime.now(timezone.utc)
+    if user_id in _STOCK_REC_CACHE:
+        cached_time, recs = _STOCK_REC_CACHE[user_id]
+        if now - cached_time < _STOCK_REC_CACHE_TTL:
+            _logger.info(f"Returning cached stock recommendations for user_id={user_id}")
+            return recs
+        else:
+            _logger.info(f"Cached stock recommendations expired for user_id={user_id}")
+
     profile = get_user_profile(user_id)
     if not profile:
         raise ValueError(f"No users_profile row for user_id={user_id}")
@@ -1688,4 +1701,6 @@ def generate_stock_recommendations(user_id: str) -> list[str]:
             f"After filtering hallucinated symbols, only {len(filtered)} valid recommendations "
             f"remained (need 5-10): {filtered!r}"
         )
+    
+    _STOCK_REC_CACHE[user_id] = (now, filtered)
     return filtered
