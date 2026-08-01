@@ -155,7 +155,7 @@ def _fetch_mf_nav_for_list_row(row: dict[str, Any]) -> dict[str, Any]:
     """Resolve nav_id from row (post-refresh) and fetch live/cached NAV. May raise ValueError."""
     detail_stats = row.get("detail_stats") or {}
     nav_id = detail_stats.get("amfi_scheme_code") or row["scheme_name"]
-    return tools.fetch_mf_nav(nav_id, skip_live_if_fresh_seconds=300)
+    return tools.fetch_mf_nav(nav_id)
 
 
 def _paginate(rows: list[dict[str, Any]], page: int, page_size: int) -> tuple[list[dict[str, Any]], int, bool, bool]:
