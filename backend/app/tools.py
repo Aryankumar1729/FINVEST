@@ -16,6 +16,8 @@ from google.genai import types
 
 from . import chroma_client
 from .db import (
+    connect,
+    execute,
     fetch_all,
     fetch_one,
     get_tax_config,
@@ -1749,6 +1751,96 @@ _STOCK_REC_CACHE: dict[str, tuple[datetime, list[dict[str, str]]]] = {}
 _STOCK_REC_CACHE_TTL = timedelta(minutes=15)
 
 
+def _build_stock_csv_block(catalog_rows: list[dict[str, Any]]) -> str:
+    # Format per-stock data block in a token-efficient CSV style
+    stock_data_lines = [
+        "symbol,sector,current_price,pct_change_today,pct_change_5d,volume_vs_avg_ratio,atr_volatility_ratio,pe_ratio,market_cap"
+    ]
+    for row in catalog_rows:
+        sym = row["symbol"]
+        sect = (row["sector"] or "N/A").replace(",", " ")
+        price = str(row["current_price"]) if row["current_price"] is not None else "N/A"
+        change = str(row["pct_change_today"]) if row["pct_change_today"] is not None else "N/A"
+        change_5d = str(row["pct_change_5d"]) if row.get("pct_change_5d") is not None else "N/A"
+        vol_ratio = str(row["volume_vs_avg_ratio"]) if row.get("volume_vs_avg_ratio") is not None else "N/A"
+        atr_ratio = str(row["atr_volatility_ratio"]) if row.get("atr_volatility_ratio") is not None else "N/A"
+        pe = str(row["pe_ratio"]) if row["pe_ratio"] is not None else "N/A"
+        mcap = str(row["market_cap"]) if row["market_cap"] is not None else "N/A"
+        stock_data_lines.append(
+            f"{sym},{sect},{price},{change},{change_5d},{vol_ratio},{atr_ratio},{pe},{mcap}"
+        )
+    return "\n".join(stock_data_lines)
+
+
+_SHORTLIST_CACHE_TTL = timedelta(hours=12)
+
+
+def generate_stock_shortlist() -> list[str]:
+    now = datetime.now(timezone.utc)
+    row = fetch_one(
+        "SELECT symbols, generated_at FROM stock_shortlist_cache ORDER BY generated_at DESC LIMIT 1"
+    )
+    if row:
+        symbols = row["symbols"]
+        if isinstance(symbols, str):
+            symbols = json.loads(symbols)
+        generated_at = row["generated_at"]
+        if now - generated_at < _SHORTLIST_CACHE_TTL:
+            _logger.info("Returning cached stock shortlist")
+            return symbols
+        else:
+            _logger.info("Cached stock shortlist expired")
+
+    catalog = list_catalog("stocks", filter_column="is_gold_etf", filter_value=False)
+    symbol_set = {row["symbol"] for row in catalog}
+
+    csv_block = _build_stock_csv_block(catalog)
+
+    prompt = (
+        "Given this real market data for the full stock universe, identify exactly 80 to 100 stocks that show notable signals worth a closer look — momentum, unusual volume, volatility, sector strength, or other broadly relevant market/technical factors. "
+        "Use the numeric data provided plus your general knowledge of current market/sector/technology conditions. Do not tailor this to any individual investor — this is a broad screen only.\n\n"
+        f"Available Stock Data (CSV format):\n{csv_block}\n\n"
+        "Return ONLY a JSON array of stock symbol strings (each must be from the provided list). You must output between 80 and 100 symbols in your array. No other keys, no explanations, no markdown."
+    )
+
+    client = get_gemini_client()
+    resp = client.models.generate_content(
+        model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite"),
+        contents=prompt,
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    raw = getattr(resp, "text", None)
+    if not raw:
+        raise ValueError("Gemini returned empty content for stock shortlist")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Gemini stock shortlist JSON parse failed: {exc}") from exc
+
+    if not isinstance(parsed, list):
+        raise ValueError(f"Expected stock shortlist to be a JSON array, got {type(parsed).__name__}")
+    for sym in parsed:
+        if not isinstance(sym, str):
+            raise ValueError(f"Expected symbol to be a string, got {type(sym).__name__}")
+
+    filtered = [sym for sym in parsed if sym in symbol_set]
+
+    count = len(filtered)
+    if count < 20 or count > 150:
+        raise ValueError(f"Gemini stock shortlist count {count} is wildly off (expected 20-150). Filtered: {filtered!r}")
+    elif count < 60 or count > 100:
+        _logger.warning(f"Gemini stock shortlist count {count} is outside the optimal range of 60-100.")
+
+    from psycopg.types.json import Jsonb
+    with connect() as conn:
+        conn.execute("DELETE FROM stock_shortlist_cache")
+        conn.execute(
+            "INSERT INTO stock_shortlist_cache (symbols, generated_at) VALUES (%s, %s)",
+            (Jsonb(filtered), now),
+        )
+    return filtered
+
+
 def generate_stock_recommendations(user_id: str) -> list[dict[str, str]]:
     now = datetime.now(timezone.utc)
     if user_id in _STOCK_REC_CACHE:
@@ -1764,23 +1856,17 @@ def generate_stock_recommendations(user_id: str) -> list[dict[str, str]]:
         raise ValueError(f"No users_profile row for user_id={user_id}")
     goals = get_user_goals(user_id)
     holdings = get_user_open_lots(user_id)
-    catalog = list_catalog("stocks", filter_column="is_gold_etf", filter_value=False)
-    symbol_set = {row["symbol"] for row in catalog}
 
-    # Format per-stock data block in a token-efficient CSV style
-    stock_data_lines = ["symbol,sector,current_price,pct_change_today,pe_ratio,market_cap"]
-    for row in catalog:
-        sym = row["symbol"]
-        sect = (row["sector"] or "N/A").replace(",", " ")
-        price = str(row["current_price"]) if row["current_price"] is not None else "N/A"
-        change = str(row["pct_change_today"]) if row["pct_change_today"] is not None else "N/A"
-        pe = str(row["pe_ratio"]) if row["pe_ratio"] is not None else "N/A"
-        mcap = str(row["market_cap"]) if row["market_cap"] is not None else "N/A"
-        stock_data_lines.append(f"{sym},{sect},{price},{change},{pe},{mcap}")
-    stock_data_block = "\n".join(stock_data_lines)
+    shortlist_symbols = generate_stock_shortlist()
+    catalog_full = list_catalog("stocks", filter_column="is_gold_etf", filter_value=False)
+    symbol_set = {row["symbol"] for row in catalog_full}
+
+    catalog = [row for row in catalog_full if row["symbol"] in shortlist_symbols]
+    stock_data_block = _build_stock_csv_block(catalog)
 
     prompt = (
         "Recommend 5 to 10 stocks for this user given their profile, goals, and holdings. "
+        "The stocks below have already been broadly screened for notable market signals. Pick the best 5-10 fits for this specific user's profile, goals, and holdings. "
         "Your recommendations must be strictly grounded in the real, current per-stock data provided below (such as price, daily percentage change, sector, P/E ratio, and market cap), rather than relying on general historical training data or pre-existing knowledge about the companies.\n"
         f"Available Stock Data (CSV format):\n{stock_data_block}\n\n"
         "Only return symbols from the available stock data list. Do not invent, modify, or suggest any symbol not in this list.\n"
@@ -1796,7 +1882,10 @@ def generate_stock_recommendations(user_id: str) -> list[dict[str, str]]:
     resp = client.models.generate_content(
         model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite"),
         contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+        ),
     )
     raw = getattr(resp, "text", None)
     if not raw:
@@ -1807,7 +1896,7 @@ def generate_stock_recommendations(user_id: str) -> list[dict[str, str]]:
         raise ValueError(f"Gemini stock recommendations JSON parse failed: {exc}") from exc
     if not isinstance(parsed, list):
         raise ValueError(f"Expected a JSON array, got {type(parsed).__name__}: {parsed!r}")
-    
+
     for item in parsed:
         if not isinstance(item, dict):
             raise ValueError(f"Expected each item to be a dict, got {type(item).__name__}: {item!r}")
@@ -1825,12 +1914,13 @@ def generate_stock_recommendations(user_id: str) -> list[dict[str, str]]:
 
     # Drop hallucinated tickers silently — a stray invented symbol shouldn't fail the whole recommendation;
     # the returned list is only as trustworthy as the real catalog.
-    filtered = [item for item in parsed if item["symbol"] in symbol_set]
+    shortlist_set = set(shortlist_symbols)
+    filtered = [item for item in parsed if item["symbol"] in shortlist_set]
     if not (5 <= len(filtered) <= 10):
         raise ValueError(
             f"After filtering hallucinated symbols, only {len(filtered)} valid recommendations "
             f"remained (need 5-10): {filtered!r}"
         )
-    
+
     _STOCK_REC_CACHE[user_id] = (now, filtered)
     return filtered
