@@ -1662,14 +1662,25 @@ def generate_stock_recommendations(user_id: str) -> list[dict[str, str]]:
     goals = get_user_goals(user_id)
     holdings = get_user_open_lots(user_id)
     catalog = list_catalog("stocks", filter_column="is_gold_etf", filter_value=False)
-    symbol_string = ",".join(row["symbol"] for row in catalog)
     symbol_set = {row["symbol"] for row in catalog}
 
+    # Format per-stock data block in a token-efficient CSV style
+    stock_data_lines = ["symbol,sector,current_price,pct_change_today,pe_ratio,market_cap"]
+    for row in catalog:
+        sym = row["symbol"]
+        sect = (row["sector"] or "N/A").replace(",", " ")
+        price = str(row["current_price"]) if row["current_price"] is not None else "N/A"
+        change = str(row["pct_change_today"]) if row["pct_change_today"] is not None else "N/A"
+        pe = str(row["pe_ratio"]) if row["pe_ratio"] is not None else "N/A"
+        mcap = str(row["market_cap"]) if row["market_cap"] is not None else "N/A"
+        stock_data_lines.append(f"{sym},{sect},{price},{change},{pe},{mcap}")
+    stock_data_block = "\n".join(stock_data_lines)
+
     prompt = (
-        "Recommend 5 to 10 stocks for this user given their profile, goals, and holdings, "
-        "analyzed against general market, sector, and history knowledge.\n"
-        f"Only return symbols from this exact list of available symbols: {symbol_string}. "
-        "Do not invent, modify, or suggest any symbol not in this list.\n"
+        "Recommend 5 to 10 stocks for this user given their profile, goals, and holdings. "
+        "Your recommendations must be strictly grounded in the real, current per-stock data provided below (such as price, daily percentage change, sector, P/E ratio, and market cap), rather than relying on general historical training data or pre-existing knowledge about the companies.\n"
+        f"Available Stock Data (CSV format):\n{stock_data_block}\n\n"
+        "Only return symbols from the available stock data list. Do not invent, modify, or suggest any symbol not in this list.\n"
         "Return ONLY a JSON array of objects, each with exactly three keys: symbol (must be from the available list), confidence (must be exactly \"High\" or \"Moderate\"), and reason (a single concise sentence, max ~20 words, explaining why this stock fits this user's profile/goals/holdings). No other text, markdown, or keys.\n"
         f"profile_salary={profile.get('salary')}\n"
         f"profile_risk_tier={profile.get('risk_tier')}\n"
