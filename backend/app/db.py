@@ -270,15 +270,32 @@ def update_stock_detail_fields(
     )
 
 
-def update_stock_price_fields(symbol: str, current_price: Any, pct_change_today: Any) -> None:
+def update_stock_price_fields(
+    symbol: str,
+    current_price: Any,
+    pct_change_today: Any,
+    pct_change_5d: Any = None,
+    volume_vs_avg_ratio: Any = None,
+    atr_volatility_ratio: Any = None,
+) -> None:
     execute(
         """
         UPDATE stocks
         SET current_price = %s,
-            pct_change_today = %s
+            pct_change_today = %s,
+            pct_change_5d = %s,
+            volume_vs_avg_ratio = %s,
+            atr_volatility_ratio = %s
         WHERE symbol = %s
         """,
-        (current_price, pct_change_today, symbol),
+        (
+            current_price,
+            pct_change_today,
+            pct_change_5d,
+            volume_vs_avg_ratio,
+            atr_volatility_ratio,
+            symbol,
+        ),
     )
 
 

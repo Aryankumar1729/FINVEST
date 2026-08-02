@@ -221,6 +221,9 @@ async def list_stocks(params: InvestQueryParams = Depends()) -> StockInvestListR
                     row["symbol"],
                     live["price"],
                     live.get("pct_change_today"),
+                    live.get("pct_change_5d"),
+                    live.get("volume_vs_avg_ratio"),
+                    live.get("atr_volatility_ratio"),
                 )
                 return live["price"], live.get("pct_change_today")
             except Exception:

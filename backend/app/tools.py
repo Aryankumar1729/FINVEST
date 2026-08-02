@@ -145,8 +145,26 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def _price_fetch_result(name: str, price: Decimal, fetched_at: datetime, **extra: Any) -> dict[str, Any]:
-    return {"name": name, "price": float(price), "fetched_at": fetched_at.isoformat(), **_jsonable(extra)}
+def _price_fetch_result(
+    name: str,
+    price: Decimal,
+    fetched_at: datetime,
+    pct_change_5d: float | None = None,
+    volume_vs_avg_ratio: float | None = None,
+    atr_volatility_ratio: float | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    payload = {
+        "name": name,
+        "price": float(price),
+        "fetched_at": fetched_at.isoformat(),
+        "pct_change_5d": pct_change_5d,
+        "volume_vs_avg_ratio": volume_vs_avg_ratio,
+        "atr_volatility_ratio": atr_volatility_ratio,
+    }
+    payload.update(_jsonable(extra))
+    return payload
+
 
 
 def _resolve_finapi_scheme_code(scheme_identifier: str) -> str:
@@ -385,6 +403,30 @@ def _close_series_from_download(df: Any, symbol: str) -> Any:
     raise ValueError(f"No Close column in download data for {symbol}")
 
 
+def _ohlcv_block_from_download(df: Any, symbol: str) -> Any:
+    """Extract the OHLCV DataFrame block for one symbol from yf.download output."""
+    if df is None or getattr(df, "empty", True):
+        raise ValueError(f"No market data returned for {symbol}")
+    columns = df.columns
+    if isinstance(columns, tuple) or getattr(columns, "nlevels", 1) > 1:
+        # MultiIndex: usually (Ticker, Price) when group_by='ticker'
+        level0 = columns.get_level_values(0)
+        if symbol in level0:
+            return df[symbol]
+        # Alternate: (Price, Ticker)
+        if "Close" in level0:
+            import pandas as pd
+            block_dict = {}
+            for col in ["Open", "High", "Low", "Close", "Adj Close", "Volume"]:
+                if col in df.columns.levels[0] and symbol in df[col].columns:
+                    block_dict[col] = df[col][symbol]
+            if block_dict:
+                return pd.DataFrame(block_dict)
+    if "Close" in columns:
+        return df
+    raise ValueError(f"No columns found in download data for {symbol}")
+
+
 async def fetch_stock_prices_batch(
     symbols: list[str],
     *,
@@ -436,7 +478,7 @@ async def fetch_stock_prices_batch(
             downloaded = await asyncio.to_thread(
                 yf.download,
                 to_fetch,
-                period="5d",
+                period="1mo",
                 group_by="ticker",
                 auto_adjust=False,
                 threads=True,
@@ -453,20 +495,67 @@ async def fetch_stock_prices_batch(
         try:
             if downloaded is None:
                 raise last_error or ValueError(f"No market data returned for {symbol}")
-            closes = _close_series_from_download(downloaded, symbol)
+            
+            block = _ohlcv_block_from_download(downloaded, symbol)
+            closes = block["Close"].dropna()
             if closes.empty:
                 raise ValueError(f"No market data returned for {symbol}")
+            
             price = closes.iloc[-1]
             previous_close = closes.iloc[-2] if len(closes) > 1 else closes.iloc[-1]
             price_d = _d(price)
             prev_d = _d(previous_close) if previous_close not in (None, 0) else price_d
             pct_change = ((price_d - prev_d) / prev_d * 100) if prev_d else Decimal("0")
+            
+            # Compute derived metrics
+            import pandas as pd
+            pct_change_5d = None
+            if len(closes) >= 6:
+                price_5d_ago = closes.iloc[-6]
+                if price_5d_ago not in (None, 0):
+                    pct_change_5d = float(((price - price_5d_ago) / price_5d_ago) * 100)
+
+            # volume_vs_avg_ratio
+            volume_vs_avg_ratio = None
+            if "Volume" in block.columns:
+                volumes = block["Volume"].dropna()
+                if len(volumes) >= 21:
+                    today_volume = volumes.iloc[-1]
+                    avg_volume = volumes.iloc[-21:-1].mean()
+                    if avg_volume not in (None, 0):
+                        volume_vs_avg_ratio = float(today_volume / avg_volume)
+
+            # atr_volatility_ratio
+            atr_volatility_ratio = None
+            if "High" in block.columns and "Low" in block.columns and "Close" in block.columns:
+                aligned = block[["High", "Low", "Close"]].dropna()
+                if len(aligned) >= 16:
+                    h = aligned["High"]
+                    l = aligned["Low"]
+                    c = aligned["Close"]
+                    c_prev = c.shift(1)
+                    
+                    tr = pd.concat([
+                        h - l,
+                        (h - c_prev).abs(),
+                        (l - c_prev).abs()
+                    ], axis=1).max(axis=1).dropna()
+                    
+                    if len(tr) >= 15:
+                        atr_baseline = tr.iloc[-15:-1].mean()
+                        today_tr = tr.iloc[-1]
+                        if atr_baseline not in (None, 0):
+                            atr_volatility_ratio = float(today_tr / atr_baseline)
+
             payload = _price_fetch_result(
                 symbol,
                 price_d,
                 datetime.now(timezone.utc),
                 symbol=symbol,
                 pct_change_today=float(pct_change),
+                pct_change_5d=pct_change_5d,
+                volume_vs_avg_ratio=volume_vs_avg_ratio,
+                atr_volatility_ratio=atr_volatility_ratio,
                 source="yfinance_download",
             )
             await asyncio.to_thread(write_price_cache, cache_key, payload["price"])
