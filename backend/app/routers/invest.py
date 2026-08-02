@@ -206,29 +206,42 @@ async def list_stocks(params: InvestQueryParams = Depends()) -> StockInvestListR
 
     symbols = [row["symbol"] for row in page_rows]
     live_by_symbol = (
-        await asyncio.to_thread(
-            tools.fetch_stock_prices_batch, symbols, skip_live_if_fresh_seconds=300
-        )
+        await tools.fetch_stock_prices_batch(symbols, skip_live_if_fresh_seconds=300)
         if symbols
         else {}
     )
 
-    items: list[StockInvestResponse] = []
-    for row in page_rows:
+    async def _resolve_and_update_row_price(row: dict[str, Any]) -> tuple[float | Decimal | None, float | None]:
         live = live_by_symbol.get(row["symbol"]) or {"status": "unavailable"}
         status = live.get("status")
         if status == "ok":
-            await asyncio.to_thread(
-                db.update_stock_price_fields,
-                row["symbol"],
-                live["price"],
-                live.get("pct_change_today"),
-            )
-            price, pct_change = live["price"], live.get("pct_change_today")
+            try:
+                await asyncio.to_thread(
+                    db.update_stock_price_fields,
+                    row["symbol"],
+                    live["price"],
+                    live.get("pct_change_today"),
+                )
+                return live["price"], live.get("pct_change_today")
+            except Exception:
+                return row["current_price"], row["pct_change_today"]
         elif status in ("stale", "cached"):
-            price, pct_change = live["price"], row["pct_change_today"]
+            return live["price"], row["pct_change_today"]
         else:
+            return row["current_price"], row["pct_change_today"]
+
+    resolved_prices = await asyncio.gather(
+        *(_resolve_and_update_row_price(row) for row in page_rows),
+        return_exceptions=True,
+    )
+
+    items: list[StockInvestResponse] = []
+    for idx, row in enumerate(page_rows):
+        res = resolved_prices[idx]
+        if isinstance(res, Exception):
             price, pct_change = row["current_price"], row["pct_change_today"]
+        else:
+            price, pct_change = res
         
         rec_item = rec_lookup.get(row["symbol"])
         confidence = rec_item["confidence"] if rec_item else None

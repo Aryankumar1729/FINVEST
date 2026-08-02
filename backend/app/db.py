@@ -20,7 +20,7 @@ _pool: ConnectionPool | None = None
 _logger = logging.getLogger(__name__)
 
 _DEFAULT_POOL_MIN_SIZE = 2
-_DEFAULT_POOL_MAX_SIZE = 10
+_DEFAULT_POOL_MAX_SIZE = 25
 
 
 def _env_int(name: str, default: int) -> int:

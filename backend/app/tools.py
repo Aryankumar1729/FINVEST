@@ -385,7 +385,7 @@ def _close_series_from_download(df: Any, symbol: str) -> Any:
     raise ValueError(f"No Close column in download data for {symbol}")
 
 
-def fetch_stock_prices_batch(
+async def fetch_stock_prices_batch(
     symbols: list[str],
     *,
     skip_live_if_fresh_seconds: int | None = 300,
@@ -394,12 +394,14 @@ def fetch_stock_prices_batch(
 
     Returns map symbol -> {status, price, pct_change_today?, ...} matching fetch_stock_price shapes.
     """
+    import time
     results: dict[str, dict[str, Any]] = {}
     to_fetch: list[str] = []
-    for symbol in symbols:
+
+    async def check_cache_for_symbol(symbol: str) -> None:
         cache_key = f"stock:{symbol}"
         if skip_live_if_fresh_seconds is not None:
-            cached = read_price_cache(cache_key)
+            cached = await asyncio.to_thread(read_price_cache, cache_key)
             if cached:
                 fetched_at = cached["fetched_at"]
                 now = datetime.now(timezone.utc)
@@ -415,8 +417,14 @@ def fetch_stock_prices_batch(
                         "cached_as_of": cached["fetched_at"].isoformat(),
                         "price": float(cached["price"]),
                     }
-                    continue
+                    return
         to_fetch.append(symbol)
+
+    if symbols:
+        await asyncio.gather(
+            *(check_cache_for_symbol(symbol) for symbol in symbols),
+            return_exceptions=True,
+        )
 
     if not to_fetch:
         return results
@@ -425,7 +433,8 @@ def fetch_stock_prices_batch(
     downloaded = None
     for _ in range(2):
         try:
-            downloaded = yf.download(
+            downloaded = await asyncio.to_thread(
+                yf.download,
                 to_fetch,
                 period="5d",
                 group_by="ticker",
@@ -439,7 +448,7 @@ def fetch_stock_prices_batch(
             last_error = exc
             downloaded = None
 
-    for symbol in to_fetch:
+    async def process_symbol(symbol: str) -> None:
         cache_key = f"stock:{symbol}"
         try:
             if downloaded is None:
@@ -460,10 +469,10 @@ def fetch_stock_prices_batch(
                 pct_change_today=float(pct_change),
                 source="yfinance_download",
             )
-            write_price_cache(cache_key, payload["price"])
+            await asyncio.to_thread(write_price_cache, cache_key, payload["price"])
             results[symbol] = {"status": "ok", "stale": False, "cache_key": cache_key, **payload}
         except Exception as exc:
-            cached = read_price_cache(cache_key)
+            cached = await asyncio.to_thread(read_price_cache, cache_key)
             if cached:
                 results[symbol] = {
                     "status": "stale",
@@ -479,6 +488,11 @@ def fetch_stock_prices_batch(
                     "cache_key": cache_key,
                     "error": str(exc),
                 }
+
+    await asyncio.gather(
+        *(process_symbol(symbol) for symbol in to_fetch),
+        return_exceptions=True,
+    )
     return results
 
 
