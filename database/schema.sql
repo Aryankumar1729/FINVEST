@@ -27,6 +27,7 @@ $$;
 -- 1) users_profile
 CREATE TABLE users_profile (
   user_id uuid PRIMARY KEY,
+  firebase_uid text UNIQUE,
   salary numeric(14,2),
   current_expense_estimate numeric(14,2),
   current_cash_balance numeric(14,2),
