@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ..auth import get_current_user_id
 from .. import chroma_client
 from .. import db
 from ..schemas import JournalCreateRequest, JournalEntryResponse, JournalEntryType
@@ -13,11 +14,14 @@ router = APIRouter()
 
 @router.get("/journal", response_model=list[JournalEntryResponse])
 def list_journal(
-    user_id: str = Query(...),
+    firebase_uid: str = Depends(get_current_user_id),
     entry_type: JournalEntryType | None = Query(None),
     limit: int = Query(20, le=100),
     offset: int = Query(0),
 ) -> list[JournalEntryResponse]:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        return []
     rows = db.list_journal_entries(
         user_id=user_id,
         entry_type=entry_type,

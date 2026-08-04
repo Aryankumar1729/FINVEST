@@ -5,8 +5,9 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 
+from ..auth import get_current_user_id
 from .. import db
 from ..schemas import (
     GoalCreateRequest,
@@ -53,7 +54,10 @@ def _goal_response(goal: dict[str, Any], variants: list[dict[str, Any]]) -> Goal
 
 
 @router.get("/goal", response_model=GoalListResponse)
-async def list_goals(user_id: str = Query(...)) -> GoalListResponse:
+async def list_goals(firebase_uid: str = Depends(get_current_user_id)) -> GoalListResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        return GoalListResponse(goals=[])
     goals = await asyncio.to_thread(db.get_user_goals, user_id)
     progress = await calculate_goal_progress(user_id)
     variant_ids = [g["selected_variant_id"] for g in goals if g.get("selected_variant_id") is not None]

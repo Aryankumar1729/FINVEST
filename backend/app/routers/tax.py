@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ..auth import get_current_user_id
 from .. import db
 from .. import tools
 from ..schemas import PayRequest, SellAllocationItem, SellAllocationListResponse, TaxResponse
@@ -13,9 +14,12 @@ router = APIRouter()
 
 @router.get("/tax", response_model=TaxResponse)
 def get_tax(
-    user_id: str = Query(...),
+    firebase_uid: str = Depends(get_current_user_id),
     assessment_year: int | None = Query(None),
 ) -> TaxResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
     if assessment_year is None:
         assessment_year = tools.get_current_assessment_year()
     profile = db.get_user_profile(user_id)
@@ -50,10 +54,13 @@ def get_tax(
 
 @router.get("/tax/allocations", response_model=SellAllocationListResponse)
 def list_tax_allocations(
-    user_id: str = Query(...),
+    firebase_uid: str = Depends(get_current_user_id),
     assessment_year: int | None = Query(None),
     paid_status: Literal["unpaid", "paid"] | None = Query(None),
 ) -> SellAllocationListResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        return SellAllocationListResponse(allocations=[])
     if assessment_year is None:
         assessment_year = tools.get_current_assessment_year()
     rows = db.get_sell_allocations(user_id, assessment_year, paid_status=paid_status)

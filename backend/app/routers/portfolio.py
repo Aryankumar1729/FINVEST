@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ..auth import get_current_user_id
 from .. import db
 from .. import tools
 from ..schemas import (
@@ -18,16 +19,31 @@ router = APIRouter()
 
 
 @router.get("/portfolio", response_model=PortfolioResponse)
-def get_portfolio(user_id: str = Query(...)) -> PortfolioResponse:
+def get_portfolio(firebase_uid: str = Depends(get_current_user_id)) -> PortfolioResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        return PortfolioResponse(
+            stock_open_value=0.0,
+            stock_sector_concentration_pct={},
+            mutual_fund_open_value=0.0,
+            mutual_fund_overlap_pct=0.0,
+            mutual_fund_overlap_details=[],
+            unpriced_lots=[],
+            stale_lots=[],
+            priced_lots=[],
+        )
     return PortfolioResponse(**tools.calculate_overlap_and_concentration(user_id))
 
 
 @router.get("/portfolio/history", response_model=PriceHistoryResponse)
 def get_portfolio_history(
-    user_id: str = Query(...),
+    firebase_uid: str = Depends(get_current_user_id),
     period: str = Query(default="1y"),
 ) -> PriceHistoryResponse:
     """Proxy portfolio value over time: today's open holdings × historical prices/NAVs."""
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        return PriceHistoryResponse(points=[])
     try:
         points = tools.calculate_portfolio_history_proxy(user_id, period=period)
     except ValueError as exc:

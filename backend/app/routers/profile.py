@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import get_current_user_id
 
@@ -61,7 +61,10 @@ def get_profile(firebase_uid: str = Depends(get_current_user_id)) -> ProfileResp
 
 
 @router.get("/profile/liabilities", response_model=list[LiabilityResponse])
-def get_liabilities(user_id: str = Query(...)) -> list[LiabilityResponse]:
+def get_liabilities(firebase_uid: str = Depends(get_current_user_id)) -> list[LiabilityResponse]:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
     if db.get_user_profile(user_id) is None:
         raise HTTPException(status_code=404, detail="User profile not found")
     rows = db.get_user_liabilities(user_id)
