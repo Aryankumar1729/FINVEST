@@ -124,6 +124,16 @@ def get_user_profile(user_id: str) -> dict[str, Any] | None:
     return fetch_one("SELECT * FROM users_profile WHERE user_id = %s", (user_id,))
 
 
+def get_user_id_by_firebase_uid(firebase_uid: str) -> str | None:
+    row = fetch_one(
+        "SELECT user_id FROM users_profile WHERE firebase_uid = %s",
+        (firebase_uid,),
+    )
+    if row is None:
+        return None
+    return row["user_id"]
+
+
 def get_user_liabilities(user_id: str) -> list[dict[str, Any]]:
     return fetch_all("SELECT * FROM liabilities WHERE user_id = %s", (user_id,))
 
@@ -319,6 +329,8 @@ def list_catalog(
     sort_order: str = "asc",
     filter_column: str | None = None,
     filter_value: Any = None,
+    limit: int | None = None,
+    offset: int | None = None,
 ) -> list[dict[str, Any]]:
     _CATALOG_WHITELIST = {
         "stocks": {
@@ -346,7 +358,10 @@ def list_catalog(
     if filter_column is not None and filter_column not in allowed["filter"]:
         raise ValueError(f"Unsupported filter_column {filter_column!r} for table {table}")
 
-    sql = f"SELECT * FROM {table}"
+    select_clause = "SELECT *"
+    if limit is not None:
+        select_clause = "SELECT *, COUNT(*) OVER() as total_count"
+    sql = f"{select_clause} FROM {table}"
     params: list[Any] = []
     clauses: list[str] = []
     if search_column is not None and search_term is not None:
@@ -359,7 +374,55 @@ def list_catalog(
         sql += " WHERE " + " AND ".join(clauses)
     if sort_column is not None:
         sql += f" ORDER BY {sort_column} {order.upper()}"
+    if limit is not None:
+        sql += " LIMIT %s"
+        params.append(limit)
+    if offset is not None:
+        sql += " OFFSET %s"
+        params.append(offset)
     return fetch_all(sql, params)
+
+
+def count_catalog(
+    table: str,
+    *,
+    search_column: str | None = None,
+    search_term: str | None = None,
+    filter_column: str | None = None,
+    filter_value: Any = None,
+) -> int:
+    _CATALOG_WHITELIST = {
+        "stocks": {
+            "search": ("symbol", "sector"),
+            "filter": ("is_gold_etf", "symbol"),
+        },
+        "mutual_funds": {"search": ("scheme_name",), "filter": ("scheme_name", "scheme_id")},
+        "fd_rates": {
+            "search": ("bank_name",),
+            "filter": (),
+        },
+    }
+    if table not in _CATALOG_WHITELIST:
+        raise ValueError(f"Unsupported catalog table: {table}")
+    allowed = _CATALOG_WHITELIST[table]
+    if search_column is not None and search_column not in allowed["search"]:
+        raise ValueError(f"Unsupported search_column {search_column!r} for table {table}")
+    if filter_column is not None and filter_column not in allowed["filter"]:
+        raise ValueError(f"Unsupported filter_column {filter_column!r} for table {table}")
+
+    sql = f"SELECT COUNT(*) FROM {table}"
+    params: list[Any] = []
+    clauses: list[str] = []
+    if search_column is not None and search_term is not None:
+        clauses.append(f"{search_column} ILIKE %s")
+        params.append(f"%{search_term}%")
+    if filter_column is not None:
+        clauses.append(f"{filter_column} = %s")
+        params.append(filter_value)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    row = fetch_one(sql, params)
+    return row["count"] if row else 0
 
 
 def get_user_goals(user_id: str) -> list[dict[str, Any]]:
