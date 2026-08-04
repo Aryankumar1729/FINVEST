@@ -25,8 +25,6 @@ class APIModel(BaseModel):
 
 
 class GoalCreateRequest(APIModel):
-    # TEMPORARY — client-supplied and UNVERIFIED until Firebase auth is added. At that point this should be derived from the verified token server-side, not trusted from the request body.
-    user_id: str
     target_amount: Decimal | None = None
     timeframe_years: int | None = None
 
@@ -92,8 +90,6 @@ class GoalListResponse(APIModel):
 
 
 class GoalSelectRequest(APIModel):
-    # TEMPORARY — client-supplied and UNVERIFIED until Firebase auth is added. At that point this should be derived from the verified token server-side, not trusted from the request body.
-    user_id: str
     goal_id: int
     variant_id: int
 
@@ -230,7 +226,6 @@ class PortfolioResponse(APIModel):
 
 
 class BuyRequest(APIModel):
-    user_id: str
     stock_symbol: str | None = None
     mutual_fund_id: int | None = None
     buy_price: Decimal
@@ -246,7 +241,6 @@ class BuyRequest(APIModel):
 
 
 class SellRequest(APIModel):
-    user_id: str
     stock_symbol: str | None = None
     mutual_fund_id: int | None = None
     sell_price: Decimal
@@ -296,7 +290,6 @@ class SellAllocationListResponse(APIModel):
 
 
 class PayRequest(APIModel):
-    user_id: str
     sell_allocation_id: int
 
 
@@ -337,13 +330,10 @@ class JournalEntryResponse(APIModel):
 
 
 class JournalCreateRequest(APIModel):
-    user_id: str
     text: str
 
 
 class SalaryUpdateRequest(APIModel):
-    # TEMPORARY — client-supplied and UNVERIFIED until Firebase auth is added. At that point this should be derived from the verified token server-side, not trusted from the request body.
-    user_id: str
     salary: Decimal
     tax_regime: TaxRegime
     current_expense_estimate: Decimal
@@ -360,20 +350,14 @@ class LiabilityItem(APIModel):
 
 
 class LiabilitiesUpdateRequest(APIModel):
-    # TEMPORARY — client-supplied and UNVERIFIED until Firebase auth is added. At that point this should be derived from the verified token server-side, not trusted from the request body.
-    user_id: str
     liabilities: list[LiabilityItem]
 
 
 class RiskAdjustRequest(APIModel):
-    # TEMPORARY — client-supplied and UNVERIFIED until Firebase auth is added. At that point this should be derived from the verified token server-side, not trusted from the request body.
-    user_id: str
     risk_tier: RiskTier
 
 
 class RiskQuestionnaireRequest(APIModel):
-    # TEMPORARY — client-supplied and UNVERIFIED until Firebase auth is added. At that point this should be derived from the verified token server-side, not trusted from the request body.
-    user_id: str
     answers: dict[str, int]
 
 

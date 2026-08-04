@@ -72,9 +72,15 @@ def get_liabilities(firebase_uid: str = Depends(get_current_user_id)) -> list[Li
 
 
 @router.put("/profile/salary", response_model=ProfileResponse)
-def update_salary(req: SalaryUpdateRequest) -> ProfileResponse:
+def update_salary(
+    req: SalaryUpdateRequest,
+    firebase_uid: str = Depends(get_current_user_id),
+) -> ProfileResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
     row = db.update_user_profile(
-        req.user_id,
+        user_id,
         req.salary,
         req.tax_regime,
         req.current_expense_estimate,
@@ -86,35 +92,47 @@ def update_salary(req: SalaryUpdateRequest) -> ProfileResponse:
 
 
 @router.put("/profile/liabilities", response_model=list[LiabilityResponse])
-def update_liabilities(req: LiabilitiesUpdateRequest) -> list[LiabilityResponse]:
-    if db.get_user_profile(req.user_id) is None:
+def update_liabilities(
+    req: LiabilitiesUpdateRequest,
+    firebase_uid: str = Depends(get_current_user_id),
+) -> list[LiabilityResponse]:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    if db.get_user_profile(user_id) is None:
         raise HTTPException(status_code=404, detail="User profile not found")
     rows = db.replace_user_liabilities(
-        req.user_id, [item.model_dump() for item in req.liabilities]
+        user_id, [item.model_dump() for item in req.liabilities]
     )
     return [_liability_response(row) for row in rows]
 
 
 @router.put("/profile/risk/adjust", response_model=ProfileResponse)
-def adjust_risk(req: RiskAdjustRequest) -> ProfileResponse:
-    profile = db.get_user_profile(req.user_id)
+def adjust_risk(
+    req: RiskAdjustRequest,
+    firebase_uid: str = Depends(get_current_user_id),
+) -> ProfileResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    profile = db.get_user_profile(user_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="User profile not found")
     old_tier = profile["risk_tier"]
-    row = db.update_user_risk_tier(req.user_id, req.risk_tier)
+    row = db.update_user_risk_tier(user_id, req.risk_tier)
     if row is None:
         raise HTTPException(status_code=404, detail="User profile not found")
     if old_tier != req.risk_tier:
         text = f"Risk tier changed from {profile['risk_tier']} to {req.risk_tier}"
-        chroma_id = f"risktier:{req.user_id}:{uuid4().hex}"
+        chroma_id = f"risktier:{user_id}:{uuid4().hex}"
         chroma_client.write_journal_embedding(
             chroma_id=chroma_id,
-            user_id=req.user_id,
+            user_id=user_id,
             entry_type="risk_tier_change",
             text=text,
         )
         db.write_journal_row(
-            user_id=req.user_id,
+            user_id=user_id,
             entry_type="risk_tier_change",
             linked_ref_type="none",
             linked_ref_id=None,
@@ -125,8 +143,14 @@ def adjust_risk(req: RiskAdjustRequest) -> ProfileResponse:
 
 
 @router.post("/profile/risk/questionnaire", response_model=RiskQuestionnaireResponse)
-def risk_questionnaire(req: RiskQuestionnaireRequest) -> RiskQuestionnaireResponse:
-    profile = db.get_user_profile(req.user_id)
+def risk_questionnaire(
+    req: RiskQuestionnaireRequest,
+    firebase_uid: str = Depends(get_current_user_id),
+) -> RiskQuestionnaireResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    profile = db.get_user_profile(user_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="User profile not found")
     old_tier = profile["risk_tier"]
@@ -134,20 +158,20 @@ def risk_questionnaire(req: RiskQuestionnaireRequest) -> RiskQuestionnaireRespon
         risk_score, risk_tier = tools.score_risk_questionnaire(req.answers)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    row = db.update_user_risk_assessment(req.user_id, risk_score, risk_tier, req.answers)
+    row = db.update_user_risk_assessment(user_id, risk_score, risk_tier, req.answers)
     if row is None:
         raise HTTPException(status_code=404, detail="User profile not found")
     if old_tier != risk_tier:
         text = f"Risk tier changed from {old_tier} to {risk_tier}"
-        chroma_id = f"risktier:{req.user_id}:{uuid4().hex}"
+        chroma_id = f"risktier:{user_id}:{uuid4().hex}"
         chroma_client.write_journal_embedding(
             chroma_id=chroma_id,
-            user_id=req.user_id,
+            user_id=user_id,
             entry_type="risk_tier_change",
             text=text,
         )
         db.write_journal_row(
-            user_id=req.user_id,
+            user_id=user_id,
             entry_type="risk_tier_change",
             linked_ref_type="none",
             linked_ref_id=None,

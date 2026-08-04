@@ -91,26 +91,38 @@ async def list_goals(firebase_uid: str = Depends(get_current_user_id)) -> GoalLi
 
 
 @router.post("/goal", response_model=GoalCreateResponse)
-def create_goal_endpoint(req: GoalCreateRequest) -> GoalCreateResponse:
+def create_goal_endpoint(
+    req: GoalCreateRequest,
+    firebase_uid: str = Depends(get_current_user_id),
+) -> GoalCreateResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
     years = req.timeframe_years if req.timeframe_years is not None else 10
     target_date = _add_years(date.today(), years)
     try:
-        variants = generate_goal_strategy_variants(req.user_id, req.target_amount, req.timeframe_years)
+        variants = generate_goal_strategy_variants(user_id, req.target_amount, req.timeframe_years)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Strategy variant generation failed: {exc}") from exc
-    goal = db.create_goal(req.user_id, req.target_amount, target_date)
-    rows = db.create_goal_strategy_variants(int(goal["goal_id"]), req.user_id, variants)
+    goal = db.create_goal(user_id, req.target_amount, target_date)
+    rows = db.create_goal_strategy_variants(int(goal["goal_id"]), user_id, variants)
     return _goal_response(goal, rows)
 
 
 @router.post("/goal/select", response_model=GoalCreateResponse)
-def select_goal_endpoint(req: GoalSelectRequest) -> GoalCreateResponse:
-    if not db.variant_belongs_to_goal(req.variant_id, req.goal_id, req.user_id):
+def select_goal_endpoint(
+    req: GoalSelectRequest,
+    firebase_uid: str = Depends(get_current_user_id),
+) -> GoalCreateResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    if not db.variant_belongs_to_goal(req.variant_id, req.goal_id, user_id):
         raise HTTPException(status_code=404, detail="Variant not found for this goal")
-    updated = db.select_goal_variant(req.goal_id, req.variant_id, req.user_id)
+    updated = db.select_goal_variant(req.goal_id, req.variant_id, user_id)
     if updated is None:
         raise HTTPException(status_code=404, detail="Goal not found")
-    loaded = db.get_goal_with_variants(req.goal_id, req.user_id)
+    loaded = db.get_goal_with_variants(req.goal_id, user_id)
     if loaded is None:
         raise HTTPException(status_code=404, detail="Goal not found")
     goal, variants = loaded

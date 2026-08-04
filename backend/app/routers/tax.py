@@ -70,8 +70,14 @@ def list_tax_allocations(
 
 
 @router.post("/tax/pay")
-def pay_tax(req: PayRequest) -> dict:
+def pay_tax(
+    req: PayRequest,
+    firebase_uid: str = Depends(get_current_user_id),
+) -> dict:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
     try:
-        return db.mark_sell_allocation_paid(req.sell_allocation_id, req.user_id)
+        return db.mark_sell_allocation_paid(req.sell_allocation_id, user_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

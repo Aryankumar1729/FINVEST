@@ -54,8 +54,14 @@ def get_portfolio_history(
 
 
 @router.post("/portfolio/buy", response_model=LotResponse)
-def buy(req: BuyRequest) -> LotResponse:
-    if db.get_user_profile(req.user_id) is None:
+def buy(
+    req: BuyRequest,
+    firebase_uid: str = Depends(get_current_user_id),
+) -> LotResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    if db.get_user_profile(user_id) is None:
         raise HTTPException(status_code=404, detail="User profile not found")
     if req.stock_symbol is not None:
         rows = db.list_catalog("stocks", filter_column="symbol", filter_value=req.stock_symbol)
@@ -68,7 +74,7 @@ def buy(req: BuyRequest) -> LotResponse:
     with db.connect() as conn:
         created = db.create_lot(
             {
-                "user_id": req.user_id,
+                "user_id": user_id,
                 "goal_id": req.goal_id,
                 "stock_symbol": req.stock_symbol,
                 "mutual_fund_id": req.mutual_fund_id,
@@ -92,16 +98,22 @@ def buy(req: BuyRequest) -> LotResponse:
 
 
 @router.post("/portfolio/sell", response_model=SellResponse)
-def sell(req: SellRequest) -> SellResponse:
+def sell(
+    req: SellRequest,
+    firebase_uid: str = Depends(get_current_user_id),
+) -> SellResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
     asset = {"stock_symbol": req.stock_symbol, "mutual_fund_id": req.mutual_fund_id}
     try:
         matched_lots = tools.match_fifo_lots(
-            req.user_id, asset, req.quantity, req.sell_price, req.sell_date
+            user_id, asset, req.quantity, req.sell_price, req.sell_date
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     tax_result = tools.calculate_ltcg_tax(
-        req.user_id, matched_lots, req.sell_price, req.sell_date
+        user_id, matched_lots, req.sell_price, req.sell_date
     )
     lot_decrements = [
         {"lot_id": lot_id, "matched_quantity": qty}
@@ -111,7 +123,7 @@ def sell(req: SellRequest) -> SellResponse:
     for detail in tax_result["details"]:
         sell_rows.append(
             {
-                "user_id": req.user_id,
+                "user_id": user_id,
                 "lot_id": detail["lot_id"],
                 "sold_quantity": detail["matched_quantity"],
                 "sell_price": req.sell_price,

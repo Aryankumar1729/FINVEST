@@ -42,18 +42,24 @@ def list_journal(
 
 
 @router.post("/journal", response_model=JournalEntryResponse)
-def create_journal(req: JournalCreateRequest) -> JournalEntryResponse:
-    if db.get_user_profile(req.user_id) is None:
+def create_journal(
+    req: JournalCreateRequest,
+    firebase_uid: str = Depends(get_current_user_id),
+) -> JournalEntryResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
+    if user_id is None:
         raise HTTPException(status_code=404, detail="User profile not found")
-    chroma_id = f"user:{req.user_id}:{uuid4().hex}"
+    if db.get_user_profile(user_id) is None:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    chroma_id = f"user:{user_id}:{uuid4().hex}"
     chroma_client.write_journal_embedding(
         chroma_id=chroma_id,
-        user_id=req.user_id,
+        user_id=user_id,
         entry_type="user_authored",
         text=req.text,
     )
     row = db.write_journal_row(
-        user_id=req.user_id,
+        user_id=user_id,
         entry_type="user_authored",
         linked_ref_type="none",
         linked_ref_id=None,
