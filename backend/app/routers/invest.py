@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import db
 from .. import tools
+from ..auth import get_optional_user_id
 from ..schemas import (
     AssetAllocation,
     FixedDepositInvestResponse,
@@ -167,7 +168,10 @@ def _paginate(rows: list[dict[str, Any]], page: int, page_size: int) -> tuple[li
     return page_rows, total, has_prev, has_next
 
 
-def _resolve_stock_catalog_rows(params: InvestQueryParams) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+def _resolve_stock_catalog_rows(
+    params: InvestQueryParams,
+    user_id: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
     rec_lookup: dict[str, dict[str, str]] = {}
     if params.search:
         rows = db.list_catalog(
@@ -177,9 +181,9 @@ def _resolve_stock_catalog_rows(params: InvestQueryParams) -> tuple[list[dict[st
             sort_column=None,
             sort_order="asc",
         )
-    elif params.user_id:
+    elif user_id:
         try:
-            recommendations = tools.generate_stock_recommendations(params.user_id)
+            recommendations = tools.generate_stock_recommendations(user_id)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Stock recommendation generation failed: {exc}") from exc
         catalog_rows = db.list_catalog("stocks", sort_column=None, sort_order="asc")
@@ -193,8 +197,12 @@ def _resolve_stock_catalog_rows(params: InvestQueryParams) -> tuple[list[dict[st
 
 
 @router.get("/invest/stocks", response_model=StockInvestListResponse)
-async def list_stocks(params: InvestQueryParams = Depends()) -> StockInvestListResponse:
-    rows, rec_lookup = await asyncio.to_thread(_resolve_stock_catalog_rows, params)
+async def list_stocks(
+    params: InvestQueryParams = Depends(),
+    firebase_uid: str | None = Depends(get_optional_user_id),
+) -> StockInvestListResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid) if firebase_uid else None
+    rows, rec_lookup = await asyncio.to_thread(_resolve_stock_catalog_rows, params, user_id)
     page_rows, total, has_prev, has_next = _paginate(rows, params.page, params.page_size)
 
     # Same per-row helper as before (swallows all exceptions internally). Run in
@@ -314,7 +322,11 @@ def get_stock_history(
 
 
 @router.get("/invest/mf", response_model=MutualFundInvestListResponse)
-async def list_mf(params: InvestQueryParams = Depends()) -> MutualFundInvestListResponse:
+async def list_mf(
+    params: InvestQueryParams = Depends(),
+    firebase_uid: str | None = Depends(get_optional_user_id),
+) -> MutualFundInvestListResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid) if firebase_uid else None
     rows = await asyncio.to_thread(
         db.list_catalog,
         "mutual_funds",
@@ -453,7 +465,11 @@ def get_mf(scheme_name: str) -> MutualFundInvestResponse:
 
 
 @router.get("/invest/fd", response_model=list[FixedDepositInvestResponse])
-def list_fd(params: InvestQueryParams = Depends()) -> list[FixedDepositInvestResponse]:
+def list_fd(
+    params: InvestQueryParams = Depends(),
+    firebase_uid: str | None = Depends(get_optional_user_id),
+) -> list[FixedDepositInvestResponse]:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid) if firebase_uid else None
     rows = db.list_catalog(
         "fd_rates",
         search_column="bank_name" if params.search else None,
@@ -472,7 +488,11 @@ def list_fd(params: InvestQueryParams = Depends()) -> list[FixedDepositInvestRes
 
 
 @router.get("/invest/gold", response_model=list[GoldInvestResponse])
-def list_gold(params: InvestQueryParams = Depends()) -> list[GoldInvestResponse]:
+def list_gold(
+    params: InvestQueryParams = Depends(),
+    firebase_uid: str | None = Depends(get_optional_user_id),
+) -> list[GoldInvestResponse]:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid) if firebase_uid else None
     # Live-fetch price per gold ETF row (same pattern as list_stocks); fall back to stocks.current_price if unavailable.
     rows = db.list_catalog(
         "stocks",

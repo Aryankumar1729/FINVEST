@@ -100,8 +100,6 @@ class InvestQueryParams(APIModel):
     sort_order: SortOrder = "asc"
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=15, ge=1, le=100)
-    # TEMPORARY — client-supplied and UNVERIFIED until Firebase auth is added. At that point this should be derived from the verified token server-side, not trusted from the request (same caveat as ChatRequest/GoalCreateRequest).
-    user_id: str | None = None
 
 
 class StockInvestResponse(APIModel):
