@@ -195,7 +195,6 @@ function BuyModalInner({
     try {
       if (mode === "mf") {
         await buyLot({
-          user_id: CURRENT_USER_ID,
           mutual_fund_id: schemeId,
           buy_price: navNum,
           buy_date: buyDate,
@@ -207,7 +206,6 @@ function BuyModalInner({
       } else {
         const catalogSymbol = toCatalogSymbol(selectedSymbol);
         await buyLot({
-          user_id: CURRENT_USER_ID,
           stock_symbol: catalogSymbol,
           buy_price: priceNum,
           buy_date: buyDate,

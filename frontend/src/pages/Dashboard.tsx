@@ -64,10 +64,10 @@ export function Dashboard() {
     setLoading(true);
     setError(null);
     Promise.all([
-      getPortfolio(CURRENT_USER_ID),
-      getGoals(CURRENT_USER_ID),
-      getPortfolioHistory(CURRENT_USER_ID, "1y"),
-      getTax(CURRENT_USER_ID),
+      getPortfolio(),
+      getGoals(),
+      getPortfolioHistory("1y"),
+      getTax(),
     ])
       .then(([p, g, history, t]) => {
         if (cancelled) return;

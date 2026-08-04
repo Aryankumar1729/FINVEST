@@ -169,7 +169,7 @@ function StocksTab({
   useEffect(() => {
     let cancelled = false;
     setRecLoading(true);
-    getStocks({ userId: CURRENT_USER_ID, pageSize: 10 })
+    getStocks({ pageSize: 10 })
       .then((res) => {
         if (!cancelled) {
           setRecStocks(res.items);

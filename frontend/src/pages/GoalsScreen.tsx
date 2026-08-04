@@ -19,7 +19,7 @@ export function GoalsScreen() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    getGoals(CURRENT_USER_ID)
+    getGoals()
       .then((res) => {
         if (cancelled) return;
         setGoals(res.goals);

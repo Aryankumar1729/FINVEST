@@ -43,7 +43,7 @@ function SellModalInner({
   useEffect(() => {
     let cancelled = false;
     setLoadingHoldings(true);
-    getPortfolio(CURRENT_USER_ID)
+    getPortfolio()
       .then((p) => {
         if (cancelled) return;
         const aggregated = aggregatePricedLots(p.priced_lots).filter((h) => h.stock_symbol);
@@ -96,7 +96,6 @@ function SellModalInner({
     setLoading(true);
     try {
       await sellLot({
-        user_id: CURRENT_USER_ID,
         stock_symbol: holding.stock_symbol,
         sell_price: priceNum,
         sell_date: sellDate,

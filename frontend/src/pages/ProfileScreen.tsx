@@ -112,7 +112,7 @@ function RiskAppetiteCard({
     setQuizLoading(true);
     setQuizError(null);
     try {
-      const res = await submitRiskQuestionnaire(CURRENT_USER_ID, payload);
+      const res = await submitRiskQuestionnaire(payload);
       toast.success(`Risk tier set to ${capitalizeTier(res.risk_tier)}`);
       setQuizOpen(false);
       await onTierUpdated();
@@ -127,7 +127,7 @@ function RiskAppetiteCard({
     setAdjustLoading(true);
     setAdjustError(null);
     try {
-      await adjustRiskTier(CURRENT_USER_ID, manualTier);
+      await adjustRiskTier(manualTier);
       toast.success(`Risk tier overridden to ${capitalizeTier(manualTier)}`);
       await onTierUpdated();
     } catch (err: unknown) {
@@ -289,7 +289,7 @@ export function ProfileScreen() {
     setLoading(true);
     setLoadError(null);
     try {
-      const p = await getProfile(CURRENT_USER_ID);
+      const p = await getProfile();
       if (p == null) {
         setProfileMissing(true);
         setProfile(null);
@@ -298,7 +298,7 @@ export function ProfileScreen() {
       }
       setProfileMissing(false);
       applyProfile(p);
-      const rows = await getLiabilities(CURRENT_USER_ID);
+      const rows = await getLiabilities();
       setLiabilities(rows.map(fromApiLiability));
       setLiabDirty(false);
     } catch (err: unknown) {
@@ -313,7 +313,7 @@ export function ProfileScreen() {
   }, [load]);
 
   const refreshProfileOnly = useCallback(async () => {
-    const p = await getProfile(CURRENT_USER_ID);
+    const p = await getProfile();
     if (p) applyProfile(p);
   }, [applyProfile]);
 
@@ -321,7 +321,7 @@ export function ProfileScreen() {
     setSalarySaving(true);
     setSalaryError(null);
     try {
-      const updated = await updateSalary(CURRENT_USER_ID, salary, taxRegime, expense, cash);
+      const updated = await updateSalary(salary, taxRegime, expense, cash);
       applyProfile(updated);
       toast.success("Salary & finances saved");
     } catch (err: unknown) {
@@ -335,7 +335,7 @@ export function ProfileScreen() {
     setLiabSaving(true);
     setLiabError(null);
     try {
-      const rows = await updateLiabilities(CURRENT_USER_ID, toLiabilityPayload(liabilities));
+      const rows = await updateLiabilities(toLiabilityPayload(liabilities));
       setLiabilities(rows.map(fromApiLiability));
       setLiabDirty(false);
       toast.success("Liabilities saved");

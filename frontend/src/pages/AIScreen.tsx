@@ -70,11 +70,11 @@ export function AIScreen() {
       let res;
       let restarted = false;
       try {
-        res = await postChat(CURRENT_USER_ID, msg, conversationId);
+        res = await postChat(msg, conversationId);
       } catch (firstErr) {
         if (conversationId) {
           restarted = true;
-          res = await postChat(CURRENT_USER_ID, msg, null);
+          res = await postChat(msg, null);
         } else {
           throw firstErr;
         }

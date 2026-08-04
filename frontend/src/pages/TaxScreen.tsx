@@ -31,8 +31,8 @@ export function TaxScreen() {
     setLoading(true);
     setError(null);
     try {
-      const tax = await getTax(CURRENT_USER_ID);
-      const alloc = await getTaxAllocations(CURRENT_USER_ID, tax.assessment_year);
+      const tax = await getTax();
+      const alloc = await getTaxAllocations(tax.assessment_year);
       setSummary(tax);
       setRows(alloc.allocations);
     } catch (err: unknown) {
@@ -52,7 +52,7 @@ export function TaxScreen() {
     setPayError(null);
     setPayingId(row.sell_allocation_id);
     try {
-      await payTax(CURRENT_USER_ID, row.sell_allocation_id);
+      await payTax(row.sell_allocation_id);
       setConfirming(null);
       toast.success("Tax payment marked as paid");
       await load();

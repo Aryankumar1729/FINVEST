@@ -47,7 +47,6 @@ function CreateGoalInner({ onClose }: { onClose: () => void }) {
     setLoading(true);
     try {
       const res = await createGoal(
-        CURRENT_USER_ID,
         Number(form.target),
         Number(form.horizon),
       );
@@ -67,7 +66,7 @@ function CreateGoalInner({ onClose }: { onClose: () => void }) {
     setError(null);
     setLoading(true);
     try {
-      const res = await selectGoalVariant(CURRENT_USER_ID, goalId, selected);
+      const res = await selectGoalVariant(goalId, selected);
       const chosen =
         res.variants.find((v) => v.variant_id === selected) ??
         variants.find((v) => v.variant_id === selected);

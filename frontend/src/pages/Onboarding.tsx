@@ -49,7 +49,6 @@ export function Onboarding() {
 
     try {
       await submitOnboarding({
-        user_id: CURRENT_USER_ID,
         salary: salaryVal,
         tax_regime: "new", // TEMPORARY: hardcoded default, onboarding UI doesn't collect this yet
         current_expense_estimate: 0, // TEMPORARY: hardcoded default, onboarding UI doesn't collect this yet
