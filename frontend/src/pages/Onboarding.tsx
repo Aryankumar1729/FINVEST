@@ -4,7 +4,6 @@ import { PrimaryButton, GhostButton, Input, Select, Card } from "../components/u
 import { Wallet, Shield, TrendingUp, CheckCircle } from "lucide-react";
 import { RISK_QUESTIONNAIRE, RISK_SECTIONS } from "../lib/risk-questionnaire";
 import { markOnboardingComplete, submitOnboarding } from "../lib/onboarding";
-import { CURRENT_USER_ID } from "../lib/constants";
 import { toast } from "sonner";
 
 const steps = [

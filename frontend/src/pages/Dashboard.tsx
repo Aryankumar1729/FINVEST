@@ -9,7 +9,6 @@ import {
 import { useNavigate } from "react-router";
 import { useApp } from "../context/AppContext";
 import { getGoals, getPortfolio, getPortfolioHistory, getTax } from "../lib/api";
-import { CURRENT_USER_ID } from "../lib/constants";
 import type {
   AggregatedHolding,
   GoalListItem,

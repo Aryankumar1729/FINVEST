@@ -5,7 +5,6 @@ import { Input, Select, GhostButton } from "../ui";
 import { toast } from "sonner";
 import { X, TrendingDown } from "lucide-react";
 import { getPortfolio, sellLot } from "../../lib/api";
-import { CURRENT_USER_ID } from "../../lib/constants";
 import type { AggregatedHolding } from "../../lib/api-types";
 import { aggregatePricedLots, todayISODate } from "../../lib/portfolio";
 

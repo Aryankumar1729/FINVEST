@@ -17,7 +17,6 @@ import type {
   ProfileRiskTier,
   TaxRegime,
 } from "../lib/api-types";
-import { CURRENT_USER_ID } from "../lib/constants";
 import { RISK_QUESTIONNAIRE, RISK_SECTIONS } from "../lib/risk-questionnaire";
 import { cn } from "../lib/utils";
 

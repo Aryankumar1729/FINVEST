@@ -3,7 +3,6 @@ import { fmt } from "../lib/utils";
 import { StatusBadge, SectionHeader, Card, TableContainer, TableHeader, EmptyState } from "../components/ui";
 import { getTax, getTaxAllocations, payTax } from "../lib/api";
 import type { SellAllocationItem, TaxResponse } from "../lib/api-types";
-import { CURRENT_USER_ID } from "../lib/constants";
 import { num } from "../lib/portfolio";
 import { toast } from "sonner";
 import { Receipt, CheckCircle } from "lucide-react";

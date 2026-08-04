@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { CURRENT_USER_ID } from "../lib/constants";
 import { fmt } from "../lib/utils";
 import {
   ChangeChip, SectionHeader, Card, TableContainer,

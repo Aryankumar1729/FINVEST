@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useApp } from "../../context/AppContext";
 import { createGoal, selectGoalVariant } from "../../lib/api";
 import type { StrategyVariant } from "../../lib/api-types";
-import { CURRENT_USER_ID } from "../../lib/constants";
 import { capitalizeVariant } from "../../lib/goals";
 import { fmt } from "../../lib/utils";
 import { Input, Select, PrimaryButton, GhostButton } from "../ui";

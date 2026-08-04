@@ -5,7 +5,6 @@ import { Input, Select, PrimaryButton, GhostButton, SearchBar, EmptyState } from
 import { toast } from "sonner";
 import { X, TrendingUp } from "lucide-react";
 import { buyLot, getStocks } from "../../lib/api";
-import { CURRENT_USER_ID } from "../../lib/constants";
 import { todayISODate } from "../../lib/portfolio";
 import type { StockInvestResponse } from "../../lib/api-types";
 

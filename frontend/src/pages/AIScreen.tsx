@@ -2,8 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { Bot, Send, CircleDot, Sparkles, TrendingUp, Target, Receipt, BarChart2, Loader2 } from "lucide-react";
 import { SectionHeader } from "../components/ui";
 import { postChat } from "../lib/api";
-import { CURRENT_USER_ID } from "../lib/constants";
-
 type ChatRole = "user" | "bot" | "system";
 
 interface ChatMessage {

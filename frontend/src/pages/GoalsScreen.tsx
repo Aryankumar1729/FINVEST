@@ -3,7 +3,6 @@ import { fmt } from "../lib/utils";
 import { StatusBadge, ProgressBar, SectionHeader, Card, EmptyState, PrimaryButton } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { getGoals } from "../lib/api";
-import { CURRENT_USER_ID } from "../lib/constants";
 import type { GoalListItem } from "../lib/api-types";
 import { capitalizeVariant, goalPlanLabel, goalStatus } from "../lib/goals";
 import { num } from "../lib/portfolio";
