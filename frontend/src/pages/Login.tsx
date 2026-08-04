@@ -1,11 +1,12 @@
 import { useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router";
+import { FirebaseError } from "firebase/app";
 import { useAuth } from "../context/AuthContext";
 import { PrimaryButton, GhostButton, Input, Card } from "../components/ui";
 import { Wallet } from "lucide-react";
 
 export function Login() {
-  const { user, loading, signIn, signUp } = useAuth();
+  const { user, loading, signIn, signUp, signInWithGoogle } = useAuth();
   const navigate = useNavigate();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
@@ -30,6 +31,24 @@ export function Login() {
       navigate("/");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Authentication failed";
+      setError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleGoogle = async () => {
+    setError(null);
+    setSubmitting(true);
+    try {
+      await signInWithGoogle();
+      navigate("/");
+    } catch (err: unknown) {
+      if (err instanceof FirebaseError && err.code === "auth/popup-closed-by-user") {
+        // User dismissed the popup — soft / silent
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Google sign-in failed";
       setError(msg);
     } finally {
       setSubmitting(false);
@@ -97,6 +116,21 @@ export function Login() {
               {submitting ? "Please wait…" : mode === "signin" ? "Sign in" : "Sign up"}
             </PrimaryButton>
           </form>
+
+          <div className="flex items-center gap-3 my-5">
+            <div className="h-px flex-1 bg-white/[0.08]" />
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">or</span>
+            <div className="h-px flex-1 bg-white/[0.08]" />
+          </div>
+
+          <GhostButton
+            className="w-full py-3 text-sm font-semibold text-foreground"
+            onClick={() => {
+              if (!submitting && !loading) void handleGoogle();
+            }}
+          >
+            Continue with Google
+          </GhostButton>
 
           <div className="mt-6 text-center">
             <GhostButton
