@@ -5,6 +5,7 @@ import { DetailPanel } from "../components/panels/DetailPanel";
 import { BuyModal } from "../components/modals/BuyModal";
 import { SellModal } from "../components/modals/SellModal";
 import { CreateGoalModal } from "../components/modals/CreateGoalModal";
+import { EmailVerificationBanner } from "../components/EmailVerificationBanner";
 import { Dashboard } from "../pages/Dashboard";
 import { InvestScreen } from "../pages/InvestScreen";
 import { GoalsScreen } from "../pages/GoalsScreen";
@@ -28,9 +29,12 @@ function AppLayout() {
   return (
     <div className="flex h-screen bg-background overflow-hidden">
       <Sidebar />
-      <main className="flex-1 flex overflow-hidden relative">
-        <Outlet />
-        <DetailPanel />
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+        <EmailVerificationBanner />
+        <div className="flex-1 flex overflow-hidden relative min-h-0">
+          <Outlet />
+          <DetailPanel />
+        </div>
       </main>
       <BuyModal />
       <SellModal />

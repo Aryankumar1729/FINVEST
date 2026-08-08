@@ -10,6 +10,7 @@ import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  sendEmailVerification,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut as firebaseSignOut,
@@ -20,11 +21,13 @@ import { auth } from "../lib/firebase";
 interface AuthContextValue {
   user: User | null;
   loading: boolean;
+  emailVerified: boolean;
   getIdToken: () => Promise<string>;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
+  resendVerificationEmail: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -53,7 +56,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signUp = useCallback(async (email: string, password: string) => {
-    await createUserWithEmailAndPassword(auth, email, password);
+    const credential = await createUserWithEmailAndPassword(auth, email, password);
+    await sendEmailVerification(credential.user);
   }, []);
 
   const signInWithGoogle = useCallback(async () => {
@@ -64,9 +68,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await firebaseSignOut(auth);
   }, []);
 
+  const resendVerificationEmail = useCallback(async () => {
+    if (!auth.currentUser) {
+      throw new Error("Not authenticated");
+    }
+    await sendEmailVerification(auth.currentUser);
+  }, []);
+
+  const emailVerified = user?.emailVerified ?? false;
+
   const value = useMemo(
-    () => ({ user, loading, getIdToken, signIn, signUp, signInWithGoogle, signOut }),
-    [user, loading, getIdToken, signIn, signUp, signInWithGoogle, signOut],
+    () => ({
+      user,
+      loading,
+      emailVerified,
+      getIdToken,
+      signIn,
+      signUp,
+      signInWithGoogle,
+      signOut,
+      resendVerificationEmail,
+    }),
+    [user, loading, emailVerified, getIdToken, signIn, signUp, signInWithGoogle, signOut, resendVerificationEmail],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
