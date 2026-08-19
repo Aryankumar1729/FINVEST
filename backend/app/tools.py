@@ -645,6 +645,12 @@ def fetch_mf_detail_fields(scheme_name: str) -> dict[str, Any] | None:
             "fund_manager": result.get("schemeFundManagers"),
             "aum": result.get("aum"),
             "expense_ratio": result.get("expenseRatio"),
+            "market_cap_weightage": result.get("market_cap_weightage"),
+            "scheme_category": result.get("scheme_category"),
+            "scheme_category_label": result.get("scheme_category_label"),
+            "cagr_returns": result.get("cagr_returns"),
+            "asset_allocation": result.get("asset_allocation"),
+            "sectors": result.get("sectors"),
         }
     except Exception:
         return None

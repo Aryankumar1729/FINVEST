@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+import logging
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,6 +15,7 @@ from ..schemas import (
     FixedDepositInvestResponse,
     GoldInvestResponse,
     InvestQueryParams,
+    MarketCapWeightage,
     MutualFundInvestListResponse,
     MutualFundInvestResponse,
     PriceHistoryResponse,
@@ -23,8 +25,12 @@ from ..schemas import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _DETAIL_STALE_AFTER = timedelta(hours=24)
+# Weekend gap tolerance for daily AMFI NAV (Fri→Mon), not a multi-day cache window.
+_MF_NAV_STALE_THRESHOLD_DAYS = 2
+_NAV_STALE_AFTER = timedelta(days=_MF_NAV_STALE_THRESHOLD_DAYS)
 
 
 def _optional_float(value: Any) -> float | None:
@@ -55,32 +61,76 @@ def _mf_amfi_scheme_code(row: dict) -> str | None:
     return str(code)
 
 
-def _mf_extra_from_live(live: dict[str, Any] | None) -> dict[str, Any]:
-    if not live:
+def _safe_asset_allocation(raw: Any) -> AssetAllocation | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return AssetAllocation(**raw)
+    except Exception:
+        logger.warning("Ignoring malformed asset_allocation in detail_stats: %r", raw)
+        return None
+
+
+def _safe_market_cap_weightage(raw: Any) -> MarketCapWeightage | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return MarketCapWeightage(**raw)
+    except Exception:
+        logger.warning("Ignoring malformed market_cap_weightage in detail_stats: %r", raw)
+        return None
+
+
+def _safe_sectors(raw: Any) -> list[SectorWeight] | None:
+    if not isinstance(raw, list):
+        return None
+    out: list[SectorWeight] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            logger.warning("Ignoring non-dict sector entry in detail_stats: %r", item)
+            continue
+        try:
+            out.append(SectorWeight(**item))
+        except Exception:
+            logger.warning("Ignoring malformed sector entry in detail_stats: %r", item)
+    return out or None
+
+
+def _mf_extra_from_detail(detail_stats: dict[str, Any] | None) -> dict[str, Any]:
+    if not detail_stats:
         return {
             "scheme_category": None,
             "scheme_category_label": None,
             "cagr_returns": None,
             "asset_allocation": None,
             "sectors": None,
+            "market_cap_weightage": None,
         }
-    allocation = live.get("asset_allocation")
-    sectors_raw = live.get("sectors")
     return {
-        "scheme_category": live.get("scheme_category"),
-        "scheme_category_label": live.get("scheme_category_label"),
-        "cagr_returns": live.get("cagr_returns"),
-        "asset_allocation": AssetAllocation(**allocation) if isinstance(allocation, dict) else None,
-        "sectors": (
-            [SectorWeight(**item) for item in sectors_raw]
-            if isinstance(sectors_raw, list)
-            else None
-        ),
+        "scheme_category": detail_stats.get("scheme_category"),
+        "scheme_category_label": detail_stats.get("scheme_category_label"),
+        "cagr_returns": detail_stats.get("cagr_returns"),
+        "asset_allocation": _safe_asset_allocation(detail_stats.get("asset_allocation")),
+        "sectors": _safe_sectors(detail_stats.get("sectors")),
+        "market_cap_weightage": _safe_market_cap_weightage(detail_stats.get("market_cap_weightage")),
     }
+
+
+def _nav_date_stale(row: dict[str, Any]) -> bool:
+    """True when nav_date is present and older than _MF_NAV_STALE_THRESHOLD_DAYS."""
+    nav_date = row.get("nav_date")
+    if nav_date is None:
+        return False
+    if isinstance(nav_date, datetime):
+        nav_date = nav_date.date()
+    if not isinstance(nav_date, date):
+        return False
+    return (date.today() - nav_date).days > _MF_NAV_STALE_THRESHOLD_DAYS
 
 
 def _mf_catalog_only(row: dict) -> MutualFundInvestResponse:
     # NAV fields not populated until a background NAV-refresh job exists.
+    detail_stats = row.get("detail_stats") or {}
     return MutualFundInvestResponse(
         scheme_id=row["scheme_id"],
         name=row["scheme_name"],
@@ -90,9 +140,8 @@ def _mf_catalog_only(row: dict) -> MutualFundInvestResponse:
         previous_nav=None,
         nav_change=None,
         pct_change=None,
-        market_cap_weightage=None,
         amfi_scheme_code=_mf_amfi_scheme_code(row),
-        **_mf_extra_from_live(None),
+        **_mf_extra_from_detail(detail_stats),
     )
 
 
@@ -107,14 +156,25 @@ def _updated_at_older_than(row: dict, max_age: timedelta) -> bool:
     return age > max_age.total_seconds()
 
 
+# Fields written only by fetch_stock_detail_fields (not by seed_catalog / seed_nifty500).
+_STOCK_DETAIL_EXTENDED_FIELDS = (
+    "pe_ratio",
+    "market_cap",
+    "eps",
+    "fifty_two_week_high",
+    "fifty_two_week_low",
+)
+
+
+def _stock_detail_extended_present(row: dict) -> bool:
+    return any(row.get(field) is not None for field in _STOCK_DETAIL_EXTENDED_FIELDS)
+
+
 def _refresh_stock_detail_if_stale(row: dict) -> None:
     try:
-        # Detail "complete" for 24h cadence: name OR fifty_two_week_high present.
-        # Do NOT require pe_ratio — gold ETFs lack trailingPE. Some ETFs also lack
-        # longName (e.g. HDFCGOLD.NS) but still return 52W from .info; treating 52W
-        # as proof we've already refreshed stops perpetual .info hits.
-        detail_present = row.get("name") is not None or row.get("fifty_two_week_high") is not None
-        if detail_present and not _updated_at_older_than(row, _DETAIL_STALE_AFTER):
+        # CSV seeds write name/sector only; gold ETFs may keep pe_ratio null after
+        # a real fetch but will have 52W fields. Require a yfinance-only field.
+        if _stock_detail_extended_present(row) and not _updated_at_older_than(row, _DETAIL_STALE_AFTER):
             return
         fields = tools.fetch_stock_detail_fields(row["symbol"])
         if fields is None:
@@ -138,10 +198,19 @@ def _refresh_stock_detail_if_stale(row: dict) -> None:
         return
 
 
+# Extended fields written by fetch_mf_detail_fields (not present in the AMFI seed).
+# We treat data as fresh only when at least one extended field is present AND the
+# row was updated within the staleness window.  Checking only "detail_stats is
+# non-empty" is NOT sufficient because the AMFI seed writes only
+# amfi_scheme_code / finapi_scheme_code into detail_stats.
+_MF_DETAIL_EXTENDED_SENTINEL = "cagr_returns"
+
+
 def _refresh_mf_detail_if_stale(row: dict) -> None:
     try:
         detail_stats = row.get("detail_stats") or {}
-        if detail_stats and not _updated_at_older_than(row, _DETAIL_STALE_AFTER):
+        extended_present = _MF_DETAIL_EXTENDED_SENTINEL in detail_stats
+        if extended_present and not _updated_at_older_than(row, _DETAIL_STALE_AFTER):
             return
         fields = tools.fetch_mf_detail_fields(row["scheme_name"])
         if fields is None:
@@ -150,13 +219,6 @@ def _refresh_mf_detail_if_stale(row: dict) -> None:
         row["detail_stats"] = fields
     except Exception:
         return
-
-
-def _fetch_mf_nav_for_list_row(row: dict[str, Any]) -> dict[str, Any]:
-    """Resolve nav_id from row (post-refresh) and fetch live/cached NAV. May raise ValueError."""
-    detail_stats = row.get("detail_stats") or {}
-    nav_id = detail_stats.get("amfi_scheme_code") or row["scheme_name"]
-    return tools.fetch_mf_nav(nav_id)
 
 
 def _paginate(rows: list[dict[str, Any]], page: int, page_size: int) -> tuple[list[dict[str, Any]], int, bool, bool]:
@@ -327,73 +389,81 @@ async def list_mf(
     firebase_uid: str | None = Depends(get_optional_user_id),
 ) -> MutualFundInvestListResponse:
     user_id = db.get_user_id_by_firebase_uid(firebase_uid) if firebase_uid else None
+    limit = params.page_size
+    offset = (params.page - 1) * params.page_size
     rows = await asyncio.to_thread(
         db.list_catalog,
         "mutual_funds",
         search_column="scheme_name" if params.search else None,
         search_term=params.search,
-        sort_column=None,
+        sort_column="scheme_name",
         sort_order="asc",
+        limit=limit,
+        offset=offset,
     )
-    # Stable pagination key — scheme_name ASC.
-    rows.sort(key=lambda r: r["scheme_name"])
-    page_rows, total, has_prev, has_next = _paginate(rows, params.page, params.page_size)
+    if rows:
+        total = rows[0].get("total_count", 0)
+        for r in rows:
+            r.pop("total_count", None)
+    else:
+        total = await asyncio.to_thread(
+            db.count_catalog,
+            "mutual_funds",
+            search_column="scheme_name" if params.search else None,
+            search_term=params.search,
+        )
+    page_rows = rows
+    has_prev = params.page > 1 and total > 0
+    has_next = (params.page - 1) * params.page_size + len(page_rows) < total
 
-    # Phase 1 then phase 2 (not merged): loop 2 reads detail_stats.amfi_scheme_code
-    # that phase 1 may populate on this request. Parallelize only within each phase.
+    # Lazy-refresh extended detail_stats for the page (cagr_returns sentinel).
+    # NAV itself comes from DB columns (latest_nav / previous_nav); get_mf falls back
+    # to a live FinAPI fetch when those are missing or past _MF_NAV_STALE_THRESHOLD_DAYS.
     if page_rows:
         await asyncio.gather(
             *(asyncio.to_thread(_refresh_mf_detail_if_stale, row) for row in page_rows)
         )
 
-    try:
-        live_by_row = (
-            await asyncio.gather(
-                *(asyncio.to_thread(_fetch_mf_nav_for_list_row, row) for row in page_rows)
-            )
-            if page_rows
-            else []
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
-
     items: list[MutualFundInvestResponse] = []
-    for row, live in zip(page_rows, live_by_row, strict=True):
-        status = live.get("status")
-        if status == "ok":
+    for row in page_rows:
+        latest = row.get("latest_nav")
+        prev = row.get("previous_nav")
+        detail_stats = row.get("detail_stats") or {}
+        extra = _mf_extra_from_detail(detail_stats)
+        if latest is None:
+            items.append(_mf_catalog_only(row))
+        elif prev is None:
             items.append(
                 MutualFundInvestResponse(
                     scheme_id=row["scheme_id"],
                     name=row["scheme_name"],
                     risk_category=row["risk_category"],
                     cagr=row["cagr"],
-                    latest_nav=live["latest_nav"],
-                    previous_nav=live["previous_nav"],
-                    nav_change=live["nav_change"],
-                    pct_change=live["pct_change"],
-                    market_cap_weightage=live["market_cap_weightage"],
-                    amfi_scheme_code=_mf_amfi_scheme_code(row),
-                    **_mf_extra_from_live(live),
-                )
-            )
-        elif status in ("stale", "cached"):
-            items.append(
-                MutualFundInvestResponse(
-                    scheme_id=row["scheme_id"],
-                    name=row["scheme_name"],
-                    risk_category=row["risk_category"],
-                    cagr=row["cagr"],
-                    latest_nav=live["price"],
+                    latest_nav=latest,
                     previous_nav=None,
                     nav_change=None,
                     pct_change=None,
-                    market_cap_weightage=None,
                     amfi_scheme_code=_mf_amfi_scheme_code(row),
-                    **_mf_extra_from_live(None),
+                    **extra,
                 )
             )
         else:
-            items.append(_mf_catalog_only(row))
+            nav_change = latest - prev
+            pct_change = (nav_change / prev * 100) if prev else None
+            items.append(
+                MutualFundInvestResponse(
+                    scheme_id=row["scheme_id"],
+                    name=row["scheme_name"],
+                    risk_category=row["risk_category"],
+                    cagr=row["cagr"],
+                    latest_nav=latest,
+                    previous_nav=prev,
+                    nav_change=nav_change,
+                    pct_change=pct_change,
+                    amfi_scheme_code=_mf_amfi_scheme_code(row),
+                    **extra,
+                )
+            )
 
     return MutualFundInvestListResponse(
         items=items,
@@ -426,42 +496,96 @@ def get_mf(scheme_name: str) -> MutualFundInvestResponse:
     if not rows:
         raise HTTPException(status_code=404, detail="Mutual fund not found")
     catalog = rows[0]
+    # Lazy-refresh extended detail stats (same pattern as list_mf).  This populates
+    # cagr_returns, sectors, asset_allocation, market_cap_weightage, scheme_category,
+    # and scheme_category_label on first detail-view access for funds that were only
+    # seeded with amfi_scheme_code / finapi_scheme_code by the AMFI script.
+    _refresh_mf_detail_if_stale(catalog)
+    latest = catalog.get("latest_nav")
+    prev = catalog.get("previous_nav")
     detail_stats = catalog.get("detail_stats") or {}
-    nav_id = detail_stats.get("amfi_scheme_code") or scheme_name
-    try:
-        live = tools.fetch_mf_nav(nav_id)
-    except ValueError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
-    status = live.get("status")
-    if status == "ok":
-        return MutualFundInvestResponse(
-            scheme_id=catalog["scheme_id"],
-            name=catalog["scheme_name"],
-            risk_category=catalog["risk_category"],
-            cagr=catalog["cagr"],
-            latest_nav=live["latest_nav"],
-            previous_nav=live["previous_nav"],
-            nav_change=live["nav_change"],
-            pct_change=live["pct_change"],
-            market_cap_weightage=live["market_cap_weightage"],
-            amfi_scheme_code=_mf_amfi_scheme_code(catalog),
-            **_mf_extra_from_live(live),
+    extra = _mf_extra_from_detail(detail_stats)
+
+    # Fast path: serve DB NAV when present and fresh. Fall back to live FinAPI
+    # when NAV was never populated or nav_date is older than _MF_NAV_STALE_THRESHOLD_DAYS.
+    needs_live = latest is None or _nav_date_stale(catalog)
+    if needs_live:
+        nav_id = detail_stats.get("amfi_scheme_code") or scheme_name
+        logger.info(
+            "get_mf live NAV fallback for %r (latest_nav=%r, nav_date=%r)",
+            scheme_name,
+            latest,
+            catalog.get("nav_date"),
         )
-    if status == "stale":
+        try:
+            live = tools.fetch_mf_nav(str(nav_id))
+        except ValueError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        status = live.get("status")
+        if status == "ok":
+            return MutualFundInvestResponse(
+                scheme_id=catalog["scheme_id"],
+                name=catalog["scheme_name"],
+                risk_category=catalog["risk_category"],
+                cagr=catalog["cagr"],
+                latest_nav=live["latest_nav"],
+                previous_nav=live["previous_nav"],
+                nav_change=live["nav_change"],
+                pct_change=live["pct_change"],
+                amfi_scheme_code=_mf_amfi_scheme_code(catalog),
+                market_cap_weightage=_safe_market_cap_weightage(live.get("market_cap_weightage")),
+                **{
+                    k: v
+                    for k, v in extra.items()
+                    if k != "market_cap_weightage"
+                },
+            )
+        if status in ("stale", "cached"):
+            return MutualFundInvestResponse(
+                scheme_id=catalog["scheme_id"],
+                name=catalog["scheme_name"],
+                risk_category=catalog["risk_category"],
+                cagr=catalog["cagr"],
+                latest_nav=live["price"],
+                previous_nav=None,
+                nav_change=None,
+                pct_change=None,
+                amfi_scheme_code=_mf_amfi_scheme_code(catalog),
+                **extra,
+            )
+        # Live fetch failed and DB has no NAV — catalog-only response.
+        if latest is None:
+            return _mf_catalog_only(catalog)
+        # Live failed but DB still has a (stale) NAV — fall through to DB path.
+
+    logger.info("get_mf DB NAV path for %r (latest_nav=%r)", scheme_name, latest)
+    if prev is None:
         return MutualFundInvestResponse(
             scheme_id=catalog["scheme_id"],
             name=catalog["scheme_name"],
             risk_category=catalog["risk_category"],
             cagr=catalog["cagr"],
-            latest_nav=live["price"],
+            latest_nav=latest,
             previous_nav=None,
             nav_change=None,
             pct_change=None,
-            market_cap_weightage=None,
             amfi_scheme_code=_mf_amfi_scheme_code(catalog),
-            **_mf_extra_from_live(None),
+            **extra,
         )
-    return _mf_catalog_only(catalog)
+    nav_change = latest - prev
+    pct_change = (nav_change / prev * 100) if prev else None
+    return MutualFundInvestResponse(
+        scheme_id=catalog["scheme_id"],
+        name=catalog["scheme_name"],
+        risk_category=catalog["risk_category"],
+        cagr=catalog["cagr"],
+        latest_nav=latest,
+        previous_nav=prev,
+        nav_change=nav_change,
+        pct_change=pct_change,
+        amfi_scheme_code=_mf_amfi_scheme_code(catalog),
+        **extra,
+    )
 
 
 @router.get("/invest/fd", response_model=list[FixedDepositInvestResponse])
