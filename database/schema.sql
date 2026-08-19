@@ -86,6 +86,9 @@ CREATE TABLE mutual_funds (
   risk_category mf_risk_category_enum NOT NULL,
   cagr numeric(9,4),
   detail_stats jsonb NOT NULL DEFAULT '{}'::jsonb,
+  latest_nav numeric(12,4),
+  previous_nav numeric(12,4),
+  nav_date date,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
