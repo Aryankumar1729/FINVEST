@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from ..auth import get_current_user_id
 from .. import chroma_client
 from .. import db
 from .. import tools
@@ -13,29 +14,36 @@ router = APIRouter()
 
 
 @router.post("/onboarding", response_model=OnboardingResponse)
-def onboard(req: OnboardingRequest) -> OnboardingResponse:
-    existing = db.get_user_profile(req.user_id)
+def onboard(
+    req: OnboardingRequest,
+    firebase_uid: str = Depends(get_current_user_id),
+) -> OnboardingResponse:
+    user_id = db.get_user_id_by_firebase_uid(firebase_uid)
     with db.connect() as conn:
-        if existing is not None:
+        if user_id is not None:
             profile = db.update_user_profile(
-                req.user_id,
+                user_id,
                 req.salary,
                 req.tax_regime,
                 req.current_expense_estimate,
                 req.current_cash_balance,
                 conn,
             )
+            if profile is None:
+                raise HTTPException(status_code=404, detail="User profile not found")
         else:
+            user_id = str(uuid4())
             profile = db.create_user_profile(
-                req.user_id,
+                user_id,
                 req.salary,
                 req.tax_regime,
                 req.current_expense_estimate,
                 req.current_cash_balance,
+                firebase_uid,
                 conn,
             )
         liability_rows = db.replace_user_liabilities(
-            req.user_id, [item.model_dump() for item in req.liabilities], conn
+            user_id, [item.model_dump() for item in req.liabilities], conn
         )
     old_tier = profile["risk_tier"] if profile else None
     risk_tier = None
@@ -45,22 +53,22 @@ def onboard(req: OnboardingRequest) -> OnboardingResponse:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         updated = db.update_user_risk_assessment(
-            req.user_id, risk_score, scored_tier, req.risk_answers
+            user_id, risk_score, scored_tier, req.risk_answers
         )
         if updated is None:
             raise HTTPException(status_code=404, detail="User profile not found")
         risk_tier = updated["risk_tier"]
         if old_tier != risk_tier:
             text = f"Risk tier changed from {old_tier} to {risk_tier}"
-            chroma_id = f"risktier:{req.user_id}:{uuid4().hex}"
+            chroma_id = f"risktier:{user_id}:{uuid4().hex}"
             chroma_client.write_journal_embedding(
                 chroma_id=chroma_id,
-                user_id=req.user_id,
+                user_id=user_id,
                 entry_type="risk_tier_change",
                 text=text,
             )
             db.write_journal_row(
-                user_id=req.user_id,
+                user_id=user_id,
                 entry_type="risk_tier_change",
                 linked_ref_type="none",
                 linked_ref_id=None,
@@ -70,15 +78,15 @@ def onboard(req: OnboardingRequest) -> OnboardingResponse:
     journal_entries_created = 0
     for item in req.self_report_answers:
         text = f"Q: {item.question}\nA: {item.answer}"
-        chroma_id = f"user:{req.user_id}:{uuid4().hex}"
+        chroma_id = f"user:{user_id}:{uuid4().hex}"
         chroma_client.write_journal_embedding(
             chroma_id=chroma_id,
-            user_id=req.user_id,
+            user_id=user_id,
             entry_type="onboarding_self_reported",
             text=text,
         )
         db.write_journal_row(
-            user_id=req.user_id,
+            user_id=user_id,
             entry_type="onboarding_self_reported",
             linked_ref_type="none",
             linked_ref_id=None,

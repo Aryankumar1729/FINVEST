@@ -144,16 +144,25 @@ def create_user_profile(
     tax_regime: str,
     current_expense_estimate: Decimal,
     current_cash_balance: Decimal,
+    firebase_uid: str,
     conn: Any | None = None,
 ) -> dict[str, Any]:
     sql = """
         INSERT INTO users_profile (
-            user_id, salary, tax_regime, current_expense_estimate, current_cash_balance
+            user_id, firebase_uid, salary, tax_regime,
+            current_expense_estimate, current_cash_balance
         )
-        VALUES (%s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING *
         """
-    params = (user_id, salary, tax_regime, current_expense_estimate, current_cash_balance)
+    params = (
+        user_id,
+        firebase_uid,
+        salary,
+        tax_regime,
+        current_expense_estimate,
+        current_cash_balance,
+    )
     if conn is not None:
         return conn.execute(sql, params).fetchone()
     return execute(sql, params)

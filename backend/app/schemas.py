@@ -175,8 +175,6 @@ class GoldInvestResponse(APIModel):
 
 
 class ChatRequest(APIModel):
-    # TEMPORARY — client-supplied and UNVERIFIED until Firebase auth is added. At that point this should be derived from the verified token server-side, not trusted from the request body.
-    user_id: str
     message: str
     conversation_id: str | None = None
 
@@ -395,8 +393,6 @@ class OnboardingSelfReportItem(APIModel):
 
 
 class OnboardingRequest(APIModel):
-    # TEMPORARY — client-supplied and UNVERIFIED until Firebase auth is added. At that point this should be derived from the verified token server-side, not trusted from the request body.
-    user_id: str
     salary: float
     tax_regime: TaxRegime
     current_expense_estimate: float
