@@ -1,7 +1,11 @@
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+_logger = logging.getLogger(__name__)
 
 from . import db
 from .config import CORS_ORIGINS
@@ -42,6 +46,15 @@ app.include_router(chat_router.router, tags=["Chat"])
 app.include_router(profile_router.router, tags=["Profile"])
 app.include_router(tax_router.router, tags=["Tax"])
 app.include_router(onboarding_router.router, tags=["Onboarding"])
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(_request: Request, exc: Exception):
+    _logger.exception("Unhandled server error: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "error": str(exc)},
+    )
 
 
 @app.get("/health")
