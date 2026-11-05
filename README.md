@@ -299,8 +299,3 @@ The database encompasses 13 core relational tables engineered with strict foreig
 * **Pessimistic Concurrency**: `SELECT ... FOR UPDATE` row locks prevent double-spending or overselling of investment lots.
 * **Anti-Hallucination Gate**: LLM-generated stock tickers are cross-referenced against the relational database before reaching the client or persistence layers.
 
----
-
-## License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
