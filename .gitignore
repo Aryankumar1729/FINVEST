@@ -92,3 +92,7 @@ scratch/
 frontend/verification-screenshots/*.mp4
 frontend/verification-screenshots/*.webm
 frontend/verification-screenshots/*.webp
+
+# ── Documentation & created files ─────────────────────────────────────────────
+MD_created_files/
+MD_Created_files/
